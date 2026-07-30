@@ -17,8 +17,9 @@ detection.
 
 ## Build status
 
-This is the honest current state. Only M0 is implemented; nothing below it has
-been written yet, and no AWS resource has ever been applied from this repo.
+This is the honest current state. **No AWS resource has ever been created from this
+repo** — there are no credentials on the machine it was built on. M0–M3 are written
+and tested locally; M4–M6 are not started.
 
 | Milestone | Status | What exists |
 |---|---|---|
@@ -31,10 +32,15 @@ been written yet, and no AWS resource has ever been applied from this repo.
 | M6 CI/CD | Not started | `.github/workflows/` is empty |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
-account, because no AWS credentials are configured on the machine this was built
-on. So `fmt` and `validate` are verified; `plan`, `apply` and `destroy` are
-**not**. `evidence/` is empty for the same reason. Treat the cost table below as
+account, because no AWS credentials are configured. So `fmt` and `validate` are
+verified; `plan`, `apply` and `destroy` are **not**. Treat the cost table below as
 calculated-from-price-lists, not observed-on-a-bill.
+
+**What is in `evidence/` is therefore local, and labelled as such.** `m1/` holds real
+training and evaluation output. `m2/` holds a real load measurement but **no rollback
+recording** — M2's actual deliverable. `m3/` holds traces from a local *simulation*,
+not a Step Functions execution. Each evidence folder states its own caveat; none of
+them are a substitute for a run against AWS.
 
 The per-milestone plan of record is in [`tasks/`](./tasks/), with an audit of M0
 against the grading rubric recorded in
@@ -44,10 +50,12 @@ against the grading rubric recorded in
 
 ## Architecture
 
-Status key: `[x]` built · `[ ]` not built yet.
+Status key: `[x]` written and tested · `[~]` partially written · `[ ]` not started.
+Nothing here has been deployed.
 
 ```
-[ ] S3 upload ──► EventBridge ──► Step Functions "intake" state machine
+[~] S3 upload ──► EventBridge ──► Step Functions "intake" state machine
+    (ASL + handlers written and tested; no Terraform, so nothing deploys)
                                        │
                                        ├─ 1. OCR            (Textract)
                                        ├─ 2. Classify       (SageMaker endpoint)
@@ -65,10 +73,11 @@ Status key: `[x]` built · `[ ]` not built yet.
                                                               ▼
                                               canary deploy ──► auto-rollback on alarm
 
-[x] Foundations that everything above sits on (infra/):
+[x] Foundations, and the inference endpoint (infra/, Terraform written):
       KMS key (per env) · ECR repo (immutable tags) · 4 S3 buckets
       (raw / processed / artifacts / data-capture) · per-component IAM roles
       · S3 remote state with native locking · GitHub Actions OIDC provider
+      · SageMaker endpoint: data capture, autoscaling, canary + auto-rollback
 ```
 
 Four document classes — `invoice`, `medical_report`, `id_document`,
@@ -111,10 +120,13 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 96 tests
+make test            # 261 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
+make measure-throughput  # the load numbers behind the M2 autoscaling target
+make simulate-intake     # run the intake flow locally, regenerate the M3 traces
+make prompts             # show the extraction prompts rendered from schemas/
 ```
 
 `make two-versions` reproduces the numbers in `evidence/m1/two-versions.md`
