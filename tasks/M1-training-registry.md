@@ -1,7 +1,6 @@
 # M1 — Reproducible Training & the Model Registry
 
-**Owner:** `model-training` (+ `synthetic-data`)  ·  **Skills:**
-`sagemaker-model-registry`, `mlops-project-conventions`  ·  **Grade tie-in:**
+**Grade tie-in:**
 Code quality (15%), reproducibility
 
 > Model accuracy is an explicit **non-goal**. Optimize reproducibility, honest
@@ -31,5 +30,5 @@ Code quality (15%), reproducibility
 - [ ] Baseline artifact exists with documented, versioned schema.
 
 ## Definition of done
-`mlops-reviewer` confirms two distinguishable versions, lineage present, and the
+A rubric audit confirms two distinguishable versions, lineage present, and the
 baseline artifact stores *distributions* (not just accuracy).

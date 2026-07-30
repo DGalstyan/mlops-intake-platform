@@ -121,3 +121,25 @@ output "intake_table_names" {
     prompts     = module.intake[0].prompts_table_name
   }, null)
 }
+
+# --- Observability (M4) ----------------------------------------------------
+
+output "dashboard_name" {
+  description = "CloudWatch dashboard name. The M4 deliverable is a screenshot of this."
+  value       = module.observability.dashboard_name
+}
+
+output "dashboard_url" {
+  description = "Direct console URL for the dashboard."
+  value       = module.observability.dashboard_url
+}
+
+output "alarm_topic_arn" {
+  description = "SNS topic every alarm publishes to."
+  value       = module.observability.alarm_topic_arn
+}
+
+output "alarm_inventory" {
+  description = "Generated inventory of every alarm, its threshold, and whether it measures model quality or system health. Rendered by `make alarm-inventory`."
+  value       = module.observability.alarm_inventory
+}

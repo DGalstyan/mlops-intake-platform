@@ -184,3 +184,11 @@ variable "log_retention_days" {
   type        = number
   default     = 14
 }
+
+# --- Observability (M4) ----------------------------------------------------
+
+variable "alarm_email" {
+  description = "Optional email subscribed to the alarm topic. Empty by default: a Terraform-created email subscription needs the recipient to confirm, and an unconfirmed subscription looks configured while delivering nothing."
+  type        = string
+  default     = ""
+}

@@ -61,6 +61,13 @@ model.tar.gz
 *.pkl
 .local/
 
+# --- Local build tooling, not part of the deliverable ---
+# Kept on disk, deliberately out of the repo: these are scaffolding for how the
+# platform was built, not part of the platform. A reviewer reading this repo should
+# see the system, not the workbench.
+.claude/
+CLAUDE.md
+
 # --- OS / editor ---
 .DS_Store
 .idea/

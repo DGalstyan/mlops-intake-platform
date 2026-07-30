@@ -1,7 +1,6 @@
 # M2 — Deployment
 
-**Owner:** `deployment-release`  ·  **Skills:** `sagemaker-model-registry`,
-`terraform-aws-conventions`  ·  **Grade tie-in:** Deployment & release safety (20%)
+**Grade tie-in:** Deployment & release safety (20%)
 
 ## Goal
 A **recorded bad deploy that rolled back on its own.**
@@ -26,6 +25,6 @@ A **recorded bad deploy that rolled back on its own.**
 - [ ] Autoscaling metric + target justified in README; cost note included.
 
 ## Definition of done
-`evidence/` contains the recorded bad-deploy → auto-rollback; `mlops-reviewer`
+`evidence/` contains the recorded bad-deploy → auto-rollback; the rubric audit
 confirms rollback is automatic (alarm-driven), not a manual command, and artifacts
 are immutable.

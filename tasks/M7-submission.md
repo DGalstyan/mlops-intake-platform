@@ -1,6 +1,6 @@
 # Submission & Wrap-up
 
-**Owner:** `mlops-reviewer` (audit) + all agents (fixes)  ·  **Grade tie-in:**
+**Grade tie-in:**
 Docs, cost & judgement (10%) + protects every other area
 
 ## Goal
@@ -22,7 +22,7 @@ and leaves nothing running.
 - [ ] `make destroy` works; confirm the account is clean.
 
 ## Acceptance criteria
-- [ ] Full `mlops-reviewer` pass: zero instant point-losers; every milestone
+- [ ] Full rubric audit: zero instant point-losers; every milestone
       deliverable present in `evidence/`; README claims match the code.
 - [ ] Optional but strongly weighted: a 5–10 min walkthrough over the dashboard.
 

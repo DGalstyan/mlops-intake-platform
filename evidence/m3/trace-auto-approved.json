@@ -1,6 +1,6 @@
 {
   "correlation_id": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1",
-  "step_count": 14,
+  "step_count": 15,
   "states_entered": [
     "Prepare",
     "ClaimIdempotencyKey",
@@ -14,6 +14,7 @@
     "ValidateExtraction",
     "DecideOutcome",
     "AutoApprove",
+    "EmitAutoApprovedMetrics",
     "MarkLedgerComplete",
     "Succeed"
   ],
@@ -82,6 +83,19 @@
       "state": "AutoApprove",
       "outcome": "AUTO_APPROVED",
       "table": "results"
+    },
+    {
+      "state": "EmitAutoApprovedMetrics",
+      "namespace": "Intake/Platform",
+      "metrics": [
+        "DocumentsProcessed",
+        "AutoApproved",
+        "Confidence",
+        "LLMInputTokens",
+        "LLMOutputTokens",
+        "OcrCharacters"
+      ],
+      "confidence": 0.9606
     },
     {
       "state": "MarkLedgerComplete",

@@ -1,11 +1,10 @@
 # M0 — Foundations (IaC bootstrap)
 
-**Owner:** `iac-terraform`  ·  **Skills:** `terraform-aws-conventions`,
-`mlops-project-conventions`  ·  **Grade tie-in:** IaC & reproducibility (15%)
+**Grade tie-in:** IaC & reproducibility (15%)
 
 **Status: NOT DONE — one blocker left.** A1 (produce the deliverable) is the only
 open item, and it needs AWS credentials. Findings A2–A17 from the audit are
-fixed. See "Audit status" below. Audited by `mlops-reviewer` 2026-07-30; fixes
+fixed. See "Audit status" below. Rubric audit 2026-07-30; fixes
 applied same day.
 
 ## Goal
@@ -66,12 +65,12 @@ beyond credentials.
       state-bucket name, and per-resource `component` tagging.
 
 ## Definition of done
-`mlops-reviewer` finds no instant point-losers in the IaC and confirms the plan
+A rubric audit finds no instant point-losers in the IaC and confirms the plan
 builds the whole stack.
 
 ---
 
-## Audit status — `mlops-reviewer`, 2026-07-30
+## Audit status — 2026-07-30
 
 Original verdict: **NOT DONE** — `evidence/` empty plus four instant
 point-losers. The Terraform itself was judged above the bar for the 15% IaC
@@ -86,7 +85,7 @@ weight; what was missing was proof and honest framing.
 - [x] **A2 — README denied the repo contained an implementation.** Rewritten as
       the platform README: architecture with a built/not-built key, quickstart,
       cost table with price constants, teardown order, honest known-gaps. The
-      asset-pack text moved to `docs/asset-pack.md` with a pointer at the top.
+      build-scaffolding text was removed from the repo entirely.
 - [x] **A3 — False comment in `kms/main.tf`** claiming no component role used
       `Resource: "*"` while inviting the grader to grep. Replaced with an accurate
       six-site count pointing at the decision log.

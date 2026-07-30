@@ -1,7 +1,6 @@
 # M6 — CI/CD
 
-**Owner:** `cicd`  ·  **Skills:** `mlops-project-conventions`,
-`terraform-aws-conventions`  ·  **Grade tie-in:** cross-cutting; release safety
+**Grade tie-in:** cross-cutting; release safety
 
 ## Goal
 A green PR run and a green main run — with OIDC and **no long-lived AWS keys.**
@@ -26,5 +25,5 @@ A green PR run and a green main run — with OIDC and **no long-lived AWS keys.*
 - [ ] The regression test demonstrably catches its target regression.
 
 ## Definition of done
-`mlops-reviewer` confirms OIDC-only auth, all PR gates present, a working main
+A rubric audit confirms OIDC-only auth, all PR gates present, a working main
 deploy path, and a regression test that earns its place.

@@ -393,8 +393,46 @@ class TestHumanReview:
 
         A document can be re-delivered; a human's correction cannot be recovered if
         it is dropped.
+
+        Asserted as reachability rather than adjacency, because M4 inserted metric
+        emission between the two. Adjacency was the weaker test — it would have
+        passed a definition that stored the result first and persisted the correction
+        afterwards, as long as they were neighbours.
         """
-        assert states["PersistCorrection"]["Next"] == "StoreReviewedResult"
+
+        def successors(name: str) -> set[str]:
+            state = states[name]
+            targets: set[str] = set()
+            if "Next" in state:
+                targets.add(state["Next"])
+            if "Default" in state:
+                targets.add(state["Default"])
+            for choice in state.get("Choices", []):
+                targets.add(choice["Next"])
+            for catcher in state.get("Catch", []):
+                targets.add(catcher["Next"])
+            return targets
+
+        def reaches(start: str, goal: str, *, blocked: str | None = None) -> bool:
+            seen, frontier = {start}, [start]
+            while frontier:
+                current = frontier.pop()
+                if current == goal:
+                    return True
+                if current == blocked:
+                    continue
+                for nxt in successors(current) - seen:
+                    seen.add(nxt)
+                    frontier.append(nxt)
+            return False
+
+        # The correction leads to the result...
+        assert reaches("PersistCorrection", "StoreReviewedResult")
+        # ...and there is no way to reach the result without going through the
+        # correction first. Blocking PersistCorrection must make it unreachable.
+        assert not reaches(
+            "CreateReviewTask", "StoreReviewedResult", blocked="PersistCorrection"
+        ), "a path reaches StoreReviewedResult without persisting the correction"
 
 
 class TestDeadLetterPath:
@@ -457,15 +495,54 @@ class TestDeadLetterPath:
 
         A document that fails must leave a record. Going directly to Fail loses it.
         """
+        # Exempt: states that run AFTER the dead-letter record is already durably in
+        # SQS. `DeadLetter` itself must be able to fail loudly rather than silently
+        # succeeding, and `EmitDeadLetterMetric` runs downstream of it — by then the
+        # document is recorded, so failing to publish a metric datapoint must not
+        # invent a second failure path. A gap in a graph is recoverable; a lost
+        # document is not.
+        after_record_is_written = {"DeadLetter", "EmitDeadLetterMetric"}
+
         offenders: list[str] = []
         for name, state in task_states(states).items():
-            if name == "DeadLetter":
+            if name in after_record_is_written:
                 continue
             for catcher in state.get("Catch", []):
                 target = catcher.get("Next")
                 if states.get(target, {}).get("Type") == "Fail":
                     offenders.append(f"{name} -> {target}")
         assert not offenders, f"catches that lose the document: {offenders}"
+
+    def test_metric_emission_never_fails_a_stored_document(
+        self, states: dict[str, Any]
+    ) -> None:
+        """Observability must not be in the critical path.
+
+        Every metric-emitting state writes AFTER the document's outcome is durably
+        stored, so a CloudWatch throttle must not turn a successful document into a
+        failed one. Each emit state's catch-all therefore continues to the same place
+        its success path goes.
+        """
+        emit_states = {
+            name: state
+            for name, state in states.items()
+            if isinstance(state.get("Resource"), str)
+            and "cloudwatch:putMetricData" in state["Resource"]
+        }
+        assert emit_states, "no metric-emitting states found"
+
+        for name, state in emit_states.items():
+            catch_all = [
+                catcher
+                for catcher in state.get("Catch", [])
+                if "States.ALL" in catcher.get("ErrorEquals", [])
+            ]
+            assert catch_all, f"{name} has no catch-all"
+            assert catch_all[0]["Next"] == state["Next"], (
+                f"{name} diverts to {catch_all[0]['Next']} on a metric failure but "
+                f"continues to {state['Next']} on success — a dropped datapoint "
+                "would change the document's outcome"
+            )
 
 
 class TestDirectSdkIntegrations:
@@ -551,6 +628,7 @@ class TestPlaceholders:
         "DeadLetterQueueUrl",
         "NormalizeOcrFunctionArn",
         "ValidateFunctionArn",
+        "Environment",
     }
 
     def test_all_placeholders_are_known(self, definition: dict[str, Any]) -> None:

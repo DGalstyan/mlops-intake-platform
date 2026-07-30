@@ -1,0 +1,59 @@
+{
+  "_comment": [
+    "AWS price constants, us-east-1, retrieved 2026-07-30.",
+    "",
+    "Single source of truth, read by BOTH Terraform (jsondecode(file(...)) in the",
+    "observability module, for the dashboard's cost metric math) and Python",
+    "(src/costs.py, for the README cost table and local estimates). An earlier",
+    "instinct was to put them in Terraform variables and repeat them in config.py;",
+    "duplicated constants that must agree are the same rot that made three",
+    "wildcard counts go stale in this repo.",
+    "",
+    "EstimatedCostPerDocument is computed as CloudWatch metric math over real",
+    "emitted token counts times these numbers — not as a guessed per-document",
+    "figure. That is why they have to be data rather than prose.",
+    "",
+    "Prices change. `retrieved` is the date to re-check, and the dashboard renders",
+    "it so a reader knows how stale the cost panel is."
+  ],
+  "retrieved": "2026-07-30",
+  "region": "us-east-1",
+
+  "bedrock": {
+    "model_id": "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "input_usd_per_1k_tokens": 0.0008,
+    "output_usd_per_1k_tokens": 0.004,
+    "_note": "Per-token pricing is model-specific. Changing bedrock_model_id in tfvars without updating these makes the cost panel wrong while still looking plausible — which is worse than a blank panel. There is a test asserting the two agree."
+  },
+
+  "textract": {
+    "detect_document_text_usd_per_1k_pages": 1.5,
+    "_note": "DetectDocumentText, first 1M pages/month tier. AnalyzeDocument is ~15-65x more expensive per page, which is why the OCR state uses DetectDocumentText."
+  },
+
+  "sagemaker": {
+    "realtime_ml_t3_medium_usd_per_hour": 0.05,
+    "_note": "The endpoint's standing cost. Billed per instance-hour whether or not it serves traffic, which is why it dominates a mostly-idle graded run and why deploy_endpoint defaults to false."
+  },
+
+  "stepfunctions": {
+    "standard_usd_per_1k_transitions": 0.025,
+    "_note": "STANDARD workflow state transitions. This intake workflow is ~14 transitions per auto-approved document, so ~$0.00035/document — negligible next to Textract and Bedrock, which is worth knowing before optimising the state count."
+  },
+
+  "dynamodb": {
+    "on_demand_write_usd_per_million": 1.25,
+    "on_demand_read_usd_per_million": 0.25
+  },
+
+  "cloudwatch": {
+    "custom_metric_usd_per_month": 0.30,
+    "dashboard_usd_per_month": 3.0,
+    "logs_ingest_usd_per_gb": 0.50,
+    "_note": "The dashboard fee is per dashboard per month beyond the first three. Custom metrics are charged per metric name x dimension combination, which is the reason the metric set is dimensioned by environment and document_class only — adding correlation_id as a dimension would create one metric per document and is the classic way to turn a $3 dashboard into a four-figure bill."
+  },
+
+  "sns": {
+    "email_notifications_usd_per_100k": 2.0
+  }
+}

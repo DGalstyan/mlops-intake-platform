@@ -43,9 +43,13 @@ module "endpoint" {
   rollback_5xx_threshold        = var.endpoint_rollback_5xx_threshold
   rollback_latency_threshold_ms = var.endpoint_rollback_latency_threshold_ms
 
-  # M4 creates the SNS topic; until then the alarms still drive rollback, they
-  # just do not notify anyone.
-  alarm_sns_topic_arns = var.alarm_sns_topic_arns
+  # The rollback alarms drive the canary rollback whether or not anyone is
+  # subscribed, but they also publish to the M4 topic so a rollback is announced
+  # rather than discovered later in the deployment history.
+  alarm_sns_topic_arns = concat(
+    [module.observability.alarm_topic_arn],
+    var.alarm_sns_topic_arns,
+  )
 
   tags = merge(local.common_tags, { component = "endpoint" })
 }

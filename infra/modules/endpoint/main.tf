@@ -147,7 +147,7 @@ resource "aws_cloudwatch_metric_alarm" "invocation_5xx" {
   alarm_actions = var.alarm_sns_topic_arns
   ok_actions    = var.alarm_sns_topic_arns
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}endpoint-5xx-${var.environment}" })
+  tags = merge(var.tags, { measures = "system health (drives auto-rollback)", Name = "${var.name_prefix}endpoint-5xx-${var.environment}" })
 }
 
 resource "aws_cloudwatch_metric_alarm" "model_latency" {
@@ -178,7 +178,7 @@ resource "aws_cloudwatch_metric_alarm" "model_latency" {
   alarm_actions = var.alarm_sns_topic_arns
   ok_actions    = var.alarm_sns_topic_arns
 
-  tags = merge(var.tags, { Name = "${var.name_prefix}endpoint-latency-${var.environment}" })
+  tags = merge(var.tags, { measures = "system health (drives auto-rollback)", Name = "${var.name_prefix}endpoint-latency-${var.environment}" })
 }
 
 # ---------------------------------------------------------------------------

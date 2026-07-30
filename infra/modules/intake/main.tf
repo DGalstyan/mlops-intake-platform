@@ -10,6 +10,13 @@
 locals {
   table_prefix = "${var.name_prefix}${var.environment}"
 
+  # Duplicated deliberately rather than passed in as a variable: this module does not
+  # otherwise depend on the observability module, and adding a variable to carry a
+  # constant string would create a dependency for no benefit. There is a test
+  # asserting every actionable alarm carries the link, which is the property that
+  # matters.
+  runbook_note = "RUNBOOK: https://github.com/DGalstyan/mlops-intake-platform/blob/main/docs/runbook.md"
+
   # Common table settings. Point-in-time recovery is deliberately OFF for the
   # ledger and prompts (both are reconstructible) and ON for the two tables holding
   # data that cannot be recreated: results, and human corrections.
@@ -239,8 +246,15 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_not_empty" {
   alarm_name = "${local.table_prefix}-dlq-not-empty"
   alarm_description = join(" ", [
     "One or more documents failed intake and are sitting in the dead-letter queue.",
-    "Each message carries correlation_id, the failing state, the error cause and a",
-    "pointer to the source object. Drain with the runbook's replay procedure."
+    "WHAT BREAKS: those documents have no result and no review task. They are not",
+    "lost — the queue retains them for 14 days — but they are not processed either.",
+    "FIRST RESPONSE: read one message. Each carries correlation_id, the failing",
+    "state, the error cause and a pointer to the source object, which is enough to",
+    "diagnose without re-running. Fix forward, then replay the queue.",
+    "NOTE: review tasks that time out after 7 days also land here, and those are",
+    "documents a human was meant to look at — check the failing state before",
+    "assuming a technical fault.",
+    local.runbook_note,
   ])
 
   namespace           = "AWS/SQS"
@@ -256,5 +270,5 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_not_empty" {
     QueueName = aws_sqs_queue.dead_letter.name
   }
 
-  tags = merge(var.tags, { Name = "${local.table_prefix}-dlq-not-empty" })
+  tags = merge(var.tags, { measures = "data safety", Name = "${local.table_prefix}-dlq-not-empty" })
 }

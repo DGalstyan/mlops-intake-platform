@@ -32,6 +32,7 @@ locals {
       DeadLetterQueueUrl      = aws_sqs_queue.dead_letter.url
       NormalizeOcrFunctionArn = aws_lambda_function.normalize_ocr.arn
       ValidateFunctionArn     = aws_lambda_function.validate.arn
+      Environment             = var.environment
     }
   )
 }

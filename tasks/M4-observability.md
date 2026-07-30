@@ -1,7 +1,6 @@
 # M4 — Observability
 
-**Owner:** `observability`  ·  **Skills:** `cloudwatch-observability`,
-`terraform-aws-conventions`  ·  **Grade tie-in:** Observability (20%)
+**Grade tie-in:** Observability (20%)
 
 ## Goal
 A dashboard a non-engineer can read, plus an actionable alarm inventory — metrics
@@ -28,6 +27,6 @@ that map to **business outcomes, not just CPU.**
 - [ ] correlation_id traceable for a single document end to end.
 
 ## Definition of done
-`mlops-reviewer` confirms metrics are business/model-oriented (not CPU-only), the
+A rubric audit confirms metrics are business/model-oriented (not CPU-only), the
 dashboard is legible, alarms are actionable, and the model-vs-system-health
 discussion is present.

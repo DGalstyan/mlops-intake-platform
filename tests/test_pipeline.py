@@ -668,6 +668,54 @@ class TestSimulatorMatchesAsl:
         assert choices[1]["Variable"] == "$.classification.predicted_class"
         assert choices[2]["Variable"] == "$.classification.auto_approve_eligible"
 
+    def test_every_simulated_state_exists_in_the_asl(
+        self, states: dict[str, Any], tmp_path: Path
+    ) -> None:
+        """Catches simulator drift directly.
+
+        If the simulator records a state the deployed definition does not have, the
+        traces in evidence/m3/ describe a workflow that does not exist. This is the
+        check that would have caught M4's metric-emission states being added to the
+        ASL and not to the simulator, or vice versa.
+
+        Two step names are deliberately outside the state machine and exempt: the
+        reviewer's out-of-band HTTP call, and the resumption it causes.
+        """
+        simulate_intake.main(["--output-dir", str(tmp_path)])
+
+        out_of_band = {"ReviewApi.submitCorrection", "CreateReviewTask.resumed"}
+        recorded: set[str] = set()
+        for path in tmp_path.glob("trace-*.json"):
+            recorded.update(json.loads(path.read_text())["states_entered"])
+
+        unknown = sorted(recorded - set(states) - out_of_band)
+        assert not unknown, (
+            f"the simulator records states the ASL does not define: {unknown}. The "
+            "traces in evidence/m3/ would describe a workflow that does not exist."
+        )
+
+    def test_metric_emission_appears_in_both(
+        self, states: dict[str, Any], tmp_path: Path
+    ) -> None:
+        """The M4 counters must actually be emitted on the paths the traces claim."""
+        simulate_intake.main(["--output-dir", str(tmp_path)])
+
+        asl_emit_states = {
+            name
+            for name, state in states.items()
+            if isinstance(state.get("Resource"), str)
+            and "cloudwatch:putMetricData" in state["Resource"]
+        }
+        auto = json.loads((tmp_path / "trace-auto-approved.json").read_text())
+        review = json.loads((tmp_path / "trace-human-corrected.json").read_text())
+
+        assert "EmitAutoApprovedMetrics" in auto["states_entered"]
+        assert "EmitAutoApprovedMetrics" in asl_emit_states
+        assert any(
+            state in review["states_entered"]
+            for state in ("EmitConfirmedMetrics", "EmitOverriddenMetrics")
+        )
+
     def test_confidence_threshold_comes_from_config(self) -> None:
         """The ASL gates on the endpoint's own boolean, not a duplicated number.
 

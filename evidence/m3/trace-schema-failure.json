@@ -1,6 +1,6 @@
 {
   "correlation_id": "intake-raw-dev#incoming/doc-id_document-00000.pdf#v1",
-  "step_count": 18,
+  "step_count": 22,
   "states_entered": [
     "Prepare",
     "ClaimIdempotencyKey",
@@ -13,10 +13,14 @@
     "Extract",
     "ValidateExtraction",
     "DecideOutcome",
+    "MarkSchemaFailure",
+    "EmitSchemaFailureMetric",
     "CreateReviewTask",
     "ReviewApi.submitCorrection",
     "CreateReviewTask.resumed",
     "PersistCorrection",
+    "CheckOverride",
+    "EmitConfirmedMetrics",
     "StoreReviewedResult",
     "MarkLedgerComplete",
     "Succeed"
@@ -86,6 +90,17 @@
       "review_reason": "SCHEMA_VALIDATION_FAILED"
     },
     {
+      "state": "MarkSchemaFailure",
+      "review_reason": "SCHEMA_VALIDATION_FAILED"
+    },
+    {
+      "state": "EmitSchemaFailureMetric",
+      "namespace": "Intake/Platform",
+      "metrics": [
+        "SchemaValidationFailure"
+      ]
+    },
+    {
       "state": "CreateReviewTask",
       "status": "PENDING_REVIEW",
       "review_reason": "SCHEMA_VALIDATION_FAILED",
@@ -117,6 +132,21 @@
       "corrected_class": "id_document",
       "was_prediction_correct": true,
       "note": "labelled training data, with provenance"
+    },
+    {
+      "state": "CheckOverride",
+      "prediction_was_correct": true,
+      "next": "EmitConfirmedMetrics"
+    },
+    {
+      "state": "EmitConfirmedMetrics",
+      "namespace": "Intake/Platform",
+      "metrics": [
+        "DocumentsProcessed",
+        "HumanReviewed",
+        "HumanConfirmed"
+      ],
+      "note": "separate counters so HumanOverrideRate has a denominator of documents actually reviewed"
     },
     {
       "state": "StoreReviewedResult",

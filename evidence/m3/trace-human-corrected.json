@@ -1,6 +1,6 @@
 {
   "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1",
-  "step_count": 18,
+  "step_count": 20,
   "states_entered": [
     "Prepare",
     "ClaimIdempotencyKey",
@@ -17,6 +17,8 @@
     "ReviewApi.submitCorrection",
     "CreateReviewTask.resumed",
     "PersistCorrection",
+    "CheckOverride",
+    "EmitConfirmedMetrics",
     "StoreReviewedResult",
     "MarkLedgerComplete",
     "Succeed"
@@ -115,6 +117,21 @@
       "corrected_class": "medical_report",
       "was_prediction_correct": true,
       "note": "labelled training data, with provenance"
+    },
+    {
+      "state": "CheckOverride",
+      "prediction_was_correct": true,
+      "next": "EmitConfirmedMetrics"
+    },
+    {
+      "state": "EmitConfirmedMetrics",
+      "namespace": "Intake/Platform",
+      "metrics": [
+        "DocumentsProcessed",
+        "HumanReviewed",
+        "HumanConfirmed"
+      ],
+      "note": "separate counters so HumanOverrideRate has a denominator of documents actually reviewed"
     },
     {
       "state": "StoreReviewedResult",

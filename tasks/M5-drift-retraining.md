@@ -1,7 +1,6 @@
 # M5 — Drift Detection & the Retraining Loop
 
-**Owner:** `drift-retraining`  ·  **Skills:** `drift-detection-methods`,
-`sagemaker-model-registry`, `stepfunctions-intake-asl`  ·  **Grade tie-in:**
+**Grade tie-in:**
 Drift & retraining loop (20%)
 
 ## Goal
@@ -33,5 +32,5 @@ retrain → gate → approve → canary cycle.
 - [ ] Gate margin + per-class floor are explicit, in config, justified in README.
 
 ## Definition of done
-`mlops-reviewer` confirms the data-vs-decay distinction, a defensible gate, no
+A rubric audit confirms the data-vs-decay distinction, a defensible gate, no
 auto-deploy without a human, and an honest sampling-bias section.

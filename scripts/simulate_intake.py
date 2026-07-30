@@ -332,11 +332,25 @@ def run_document(
         tables.ledger[correlation_id]["status"] = "COMPLETE"
         trace.record("DecideOutcome", decision="AutoApprove")
         trace.record("AutoApprove", outcome="AUTO_APPROVED", table="results")
+        trace.record(
+            "EmitAutoApprovedMetrics",
+            namespace="Intake/Platform",
+            metrics=["DocumentsProcessed", "AutoApproved", "Confidence",
+                     "LLMInputTokens", "LLMOutputTokens", "OcrCharacters"],
+            confidence=round(confidence, 4),
+        )
         trace.record("MarkLedgerComplete", status="COMPLETE")
         trace.record("Succeed", end=True)
         return trace
 
     trace.record("DecideOutcome", decision="CreateReviewTask", review_reason=review_reason)
+    if review_reason == "SCHEMA_VALIDATION_FAILED":
+        trace.record("MarkSchemaFailure", review_reason=review_reason)
+        trace.record(
+            "EmitSchemaFailureMetric",
+            namespace="Intake/Platform",
+            metrics=["SchemaValidationFailure"],
+        )
 
     # --- CreateReviewTask (.waitForTaskToken) ---
     task_token = f"tok-{hashlib.sha256(correlation_id.encode()).hexdigest()[:16]}"
@@ -407,6 +421,23 @@ def run_document(
         corrected_class=review["corrected_class"],
         was_prediction_correct=review["prediction_was_correct"],
         note="labelled training data, with provenance",
+    )
+    trace.record(
+        "CheckOverride",
+        prediction_was_correct=review["prediction_was_correct"],
+        next="EmitConfirmedMetrics"
+        if review["prediction_was_correct"]
+        else "EmitOverriddenMetrics",
+    )
+    trace.record(
+        "EmitConfirmedMetrics"
+        if review["prediction_was_correct"]
+        else "EmitOverriddenMetrics",
+        namespace="Intake/Platform",
+        metrics=["DocumentsProcessed", "HumanReviewed"]
+        + (["HumanConfirmed"] if review["prediction_was_correct"] else ["HumanOverride"]),
+        note="separate counters so HumanOverrideRate has a denominator of documents "
+             "actually reviewed",
     )
 
     # --- StoreReviewedResult ---

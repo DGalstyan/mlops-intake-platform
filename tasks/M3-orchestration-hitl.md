@@ -1,7 +1,6 @@
 # M3 — Orchestration & Human-in-the-Loop
 
-**Owner:** `orchestration`  ·  **Skills:** `stepfunctions-intake-asl`,
-`mlops-project-conventions`  ·  **Grade tie-in:** feeds all areas; enables the
+**Grade tie-in:** feeds all areas; enables the
 end-to-end trace
 
 ## Goal
@@ -31,5 +30,5 @@ document.
 - [ ] Corrections land in the labelled-data store with full provenance.
 
 ## Definition of done
-`mlops-reviewer` confirms retries/catches on all fallible states, idempotency,
+A rubric audit confirms retries/catches on all fallible states, idempotency,
 working task-token resume, and a debuggable dead-letter path.
