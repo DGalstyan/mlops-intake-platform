@@ -86,3 +86,22 @@ module "ecr" {
 
   tags = merge(local.common_tags, { component = "inference" })
 }
+
+# ---------------------------------------------------------------------------
+# Model Package Group.
+#
+# Created here rather than by boto3 in src/training/register.py, which is how it
+# worked before an audit caught it. A group created by application code is a resource
+# Terraform does not know about: it survives `make destroy` along with every version
+# registered into it, and "destroy leaves nothing behind" was therefore false while
+# the README listed only the KMS key and the state bucket as survivors.
+#
+# register.py's ensure_group() is now a no-op safety net for local runs rather than
+# the thing that creates it.
+# ---------------------------------------------------------------------------
+resource "aws_sagemaker_model_package_group" "classifier" {
+  model_package_group_name        = "${local.name_prefix}classifier-${var.environment}"
+  model_package_group_description = "Document intake classifier. Versions are registered PendingManualApproval; a human approving one is what triggers the canary deploy."
+
+  tags = merge(local.common_tags, { component = "registry" })
+}

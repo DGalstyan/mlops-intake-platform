@@ -453,13 +453,189 @@ data "aws_iam_policy_document" "ci_deploy_permissions" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# The permissions the ci-deploy role needs to actually run `terraform apply`.
+#
+# Absent until an audit pointed out that the main workflow's apply job could not have
+# worked even with credentials — the role could push an image and write its own state
+# key and nothing else. The README claimed "M6 closes this"; M6 did not.
+#
+# Scoped by TAG rather than by ARN. Terraform creates resources it names at apply
+# time, so an ARN allowlist is either incomplete or a wildcard. Every resource in this
+# stack carries project=intake via default_tags, and the conditions below require it
+# on creation and on mutation — which is the same principle as an ARN scope with a key
+# that actually works for created-at-apply-time resources.
+#
+# STILL DELIBERATELY ABSENT: iam:CreateRole and iam:AttachRolePolicy. A CI role that
+# can mint IAM roles can escalate to anything, and no tag condition prevents that.
+# Bootstrapping IAM stays a human action; CI manages everything downstream of it.
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "ci_deploy_apply" {
+  statement {
+    sid    = "ReadEverythingItManages"
+    effect = "Allow"
+    actions = [
+      "s3:GetBucket*",
+      "s3:ListBucket*",
+      "dynamodb:DescribeTable",
+      "dynamodb:ListTagsOfResource",
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueueTags",
+      "lambda:GetFunction*",
+      "lambda:ListTags",
+      "states:DescribeStateMachine",
+      "sagemaker:Describe*",
+      "sagemaker:List*",
+      "cloudwatch:DescribeAlarms",
+      "cloudwatch:GetDashboard",
+      "logs:Describe*",
+      "events:Describe*",
+      "events:List*",
+      "sns:GetTopicAttributes",
+      "apigateway:GET",
+      "kms:DescribeKey",
+      "ecr:DescribeRepositories",
+      "iam:GetRole",
+      "iam:ListRolePolicies",
+      "iam:GetRolePolicy",
+    ]
+    # Read-only description of resources. Terraform must refresh state for resources
+    # whose ARNs it discovers during the refresh itself, so this cannot be ARN-scoped
+    # without breaking `plan`.
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ManageTaggedProjectResources"
+    effect = "Allow"
+    actions = [
+      "dynamodb:CreateTable",
+      "dynamodb:DeleteTable",
+      "dynamodb:UpdateTable",
+      "dynamodb:UpdateTimeToLive",
+      "sqs:CreateQueue",
+      "sqs:DeleteQueue",
+      "sqs:SetQueueAttributes",
+      "sqs:TagQueue",
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:TagResource",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "states:CreateStateMachine",
+      "states:DeleteStateMachine",
+      "states:UpdateStateMachine",
+      "states:TagResource",
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:TagResource",
+      "cloudwatch:PutMetricAlarm",
+      "cloudwatch:DeleteAlarms",
+      "cloudwatch:PutDashboard",
+      "cloudwatch:DeleteDashboards",
+      "cloudwatch:TagResource",
+      "logs:CreateLogGroup",
+      "logs:DeleteLogGroup",
+      "logs:PutRetentionPolicy",
+      "logs:TagResource",
+      "sns:CreateTopic",
+      "sns:DeleteTopic",
+      "sns:SetTopicAttributes",
+      "sns:Subscribe",
+      "sns:TagResource",
+      "sagemaker:CreateModel",
+      "sagemaker:DeleteModel",
+      "sagemaker:CreateEndpointConfig",
+      "sagemaker:DeleteEndpointConfig",
+      "sagemaker:CreateEndpoint",
+      "sagemaker:UpdateEndpoint",
+      "sagemaker:DeleteEndpoint",
+      "sagemaker:CreateModelPackageGroup",
+      "sagemaker:DeleteModelPackageGroup",
+      "sagemaker:AddTags",
+      "s3:PutBucketNotification",
+      "apigateway:POST",
+      "apigateway:PATCH",
+      "apigateway:DELETE",
+      "apigateway:PUT",
+      "application-autoscaling:RegisterScalableTarget",
+      "application-autoscaling:DeregisterScalableTarget",
+      "application-autoscaling:PutScalingPolicy",
+      "application-autoscaling:DeleteScalingPolicy",
+    ]
+    resources = ["*"]
+
+    # The scope that matters: only resources tagged as this project's.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/project"
+      values   = [var.project]
+    }
+  }
+
+  statement {
+    sid    = "CreateTaggedProjectResources"
+    effect = "Allow"
+    actions = [
+      "dynamodb:CreateTable",
+      "sqs:CreateQueue",
+      "lambda:CreateFunction",
+      "states:CreateStateMachine",
+      "sns:CreateTopic",
+      "logs:CreateLogGroup",
+      "cloudwatch:PutMetricAlarm",
+      "sagemaker:CreateModel",
+      "sagemaker:CreateEndpointConfig",
+      "sagemaker:CreateEndpoint",
+      "sagemaker:CreateModelPackageGroup",
+    ]
+    resources = ["*"]
+
+    # Creation carries no resource tag yet, so the condition is on the REQUEST tags.
+    # Together with the statement above this means CI can only create resources it
+    # tags as this project's, and can only mutate resources already tagged so.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/project"
+      values   = [var.project]
+    }
+  }
+
+  statement {
+    # Terraform passes the component roles to the services that assume them.
+    sid     = "PassComponentRoles"
+    effect  = "Allow"
+    actions = ["iam:PassRole"]
+    resources = [
+      local.training_role_arn,
+      local.endpoint_role_arn,
+      "arn:aws:iam::${local.account_id}:role/${local.name_prefix}state-machine-${var.environment}",
+      "arn:aws:iam::${local.account_id}:role/${local.name_prefix}${var.environment}-*",
+    ]
+  }
+}
+
 module "ci_deploy_role" {
   source = "../iam_role"
 
   role_name               = "${local.name_prefix}ci-deploy-${var.environment}"
   description             = "GitHub Actions OIDC deploy role (component=ci-deploy, env=${var.environment}). Repository-scoped trust, no long-lived AWS keys."
   assume_role_policy_json = data.aws_iam_policy_document.ci_deploy_assume.json
-  inline_policy_json      = data.aws_iam_policy_document.ci_deploy_permissions.json
+  inline_policy_json      = data.aws_iam_policy_document.ci_deploy_combined.json
 
   tags = merge(local.common_tags, { component = "ci-deploy" })
+}
+
+
+# Merged so the role carries one inline policy rather than two, which keeps it under
+# the inline-policy size limit and makes the whole grant readable in one place.
+data "aws_iam_policy_document" "ci_deploy_combined" {
+  source_policy_documents = [
+    data.aws_iam_policy_document.ci_deploy_permissions.json,
+    data.aws_iam_policy_document.ci_deploy_apply.json,
+  ]
 }

@@ -406,56 +406,28 @@ resource "aws_cloudwatch_metric_alarm" "end_to_end_latency_high" {
   tags          = merge(var.tags, { measures = "system health", Name = "${local.name}-intake-latency-p95-high" })
 }
 
-resource "aws_cloudwatch_metric_alarm" "review_backlog_high" {
-  count = local.has_state_machine ? 1 : 0
-
-  alarm_name = "${local.name}-review-backlog-high"
-  alarm_description = join(" ", [
-    "More than ${var.review_backlog_ceiling} documents are waiting for human review.",
-    "WHAT BREAKS: not the system — but review tasks expire after 7 days and then",
-    "DEAD-LETTER, so an undrained backlog becomes data loss on a timer.",
-    "FIRST RESPONSE: check whether the arrival rate rose or the review rate fell. If",
-    "the backlog is from an auto-approval-rate drop, fix that first — adding",
-    "reviewers treats the symptom.",
-    local.runbook_note,
-  ])
-
-  comparison_operator = "GreaterThanThreshold"
-  threshold           = var.review_backlog_ceiling
-  evaluation_periods  = 2
-  treat_missing_data  = "notBreaching"
-
-  metric_query {
-    id          = "backlog"
-    expression  = "reviewed_in - reviewed_out"
-    label       = "PendingReviewBacklog (approx)"
-    return_data = true
-  }
-
-  metric_query {
-    id = "reviewed_in"
-    metric {
-      namespace   = local.ns
-      metric_name = "DocumentsProcessed"
-      dimensions  = local.dim
-      period      = 3600
-      stat        = "Sum"
-    }
-  }
-
-  metric_query {
-    id = "reviewed_out"
-    metric {
-      namespace   = local.ns
-      metric_name = "HumanReviewed"
-      dimensions  = local.dim
-      period      = 3600
-      stat        = "Sum"
-    }
-  }
-
-  alarm_actions = [aws_sns_topic.alarms.arn]
-  tags          = merge(var.tags, { measures = "operational risk (review tasks expire)", Name = "${local.name}-review-backlog-high" })
-}
+# ---------------------------------------------------------------------------
+# REVIEW-QUEUE AGEING IS NOT MONITORED. This is a stated gap, not an oversight.
+#
+# The right quantity is the age of the oldest pending review: tasks expire after 7
+# days and then dead-letter, so an undrained queue becomes data loss on a deadline,
+# and queue *depth* says nothing about that — a hundred tasks queued this morning are
+# fine, one task queued six days ago is not.
+#
+# Two wrong versions were written before this comment:
+#   1. An alarm on `DocumentsProcessed - HumanReviewed`. Both counters are emitted
+#      only when a document reaches a TERMINAL state, so a document parked in review
+#      contributes to neither and the expression evaluated to the auto-approved count.
+#      It fired when auto-approvals were healthy and could not detect a backlog at all.
+#   2. An alarm on `OldestPendingReviewAgeHours` — the right metric, which nothing
+#      emits. That is precisely the defect this module was just fixed for: an alarm
+#      reading a metric with no publisher sits in INSUFFICIENT_DATA forever while
+#      appearing configured. Shipping it would have repeated the bug knowingly.
+#
+# Emitting it needs a scheduled scan of the review-queue table's status-queued_at
+# index, which belongs with the M5 drift job — and the M5 Terraform does not exist.
+# Recorded in the README's known gaps rather than papered over with an alarm that
+# cannot fire.
+# ---------------------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}

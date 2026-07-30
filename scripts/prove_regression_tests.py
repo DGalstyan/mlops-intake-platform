@@ -94,6 +94,21 @@ REGRESSIONS: tuple[Regression, ...] = (
         test="tests/test_drift.py::TestFalsePositiveRegressions::test_confidence_reference_is_held_out_not_training",
     ),
     Regression(
+        name="metrics-dimension-mismatch",
+        why_it_matters=(
+            "CloudWatch treats the dimension SET as part of a metric's identity and "
+            "does not roll up. Emitting [Environment, DocumentClass] while the alarms "
+            "query [Environment] leaves 6 of 11 alarms in INSUFFICIENT_DATA forever — "
+            "and with treat_missing_data=notBreaching they never fire, while looking "
+            "perfectly configured. This was live in the repo; two tests passed "
+            "throughout because they compared metric NAMES only."
+        ),
+        target_file="statemachines/intake.asl.json",
+        find='"Dimensions": [\n              {\n                "Name": "Environment",\n                "Value": "${Environment}"\n              }\n            ]',
+        replace='"Dimensions": [\n              {\n                "Name": "Environment",\n                "Value": "${Environment}"\n              },\n              {\n                "Name": "DocumentClass",\n                "Value.$": "$.classification.predicted_class"\n              }\n            ]',
+        test="tests/test_observability.py::TestMetricEmission::test_every_consumed_metric_is_emitted_with_the_dimensions_it_is_queried_by",
+    ),
+    Regression(
         name="idempotency-guard-removed",
         why_it_matters=(
             "Dropping the conditional write on the review task means one document "

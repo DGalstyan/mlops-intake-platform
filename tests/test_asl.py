@@ -369,6 +369,28 @@ class TestHumanReview:
         """
         assert states["CreateReviewTask"].get("TimeoutSeconds")
 
+    def test_execution_timeout_exceeds_the_review_timeout(
+        self, definition: dict[str, Any], states: dict[str, Any]
+    ) -> None:
+        """The execution must outlive the state that waits longest inside it.
+
+        A top-level timeout shorter than CreateReviewTask's kills the execution before
+        the review state can time out — and a States.Timeout raised by the EXECUTION
+        limit is not catchable by any state's Catch. The dead-letter path becomes
+        unreachable and a document parked over a weekend is lost silently: no result,
+        no review task, no DLQ record, nothing to replay.
+
+        This was live: execution 86400s (24h) vs review 604800s (7d). Two tests
+        asserted each timeout existed; neither compared them, which is why an
+        interaction bug survived a suite that checked both operands.
+        """
+        execution = int(definition["TimeoutSeconds"])
+        review = int(states["CreateReviewTask"]["TimeoutSeconds"])
+        assert execution > review, (
+            f"execution timeout {execution}s does not exceed the review timeout "
+            f"{review}s. The execution dies first and the timeout Catch is dead code."
+        )
+
     def test_timeout_dead_letters(self, states: dict[str, Any]) -> None:
         timeout_catchers = [
             catcher
@@ -603,8 +625,8 @@ class TestDirectSdkIntegrations:
         self, states: dict[str, Any]
     ) -> None:
         """Confidence and business-rule routing is expressible in ASL."""
-        assert states["Route"]["Type"] == "Choice"
         assert states["DecideOutcome"]["Type"] == "Choice"
+        assert states["CheckOverride"]["Type"] == "Choice"
 
 
 class TestCorrelationId:

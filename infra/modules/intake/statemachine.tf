@@ -246,6 +246,23 @@ resource "aws_sfn_state_machine" "intake" {
 # outright, so most redeliveries never start an execution at all. The ledger claim
 # inside the workflow catches the remainder (a redelivery after the dedupe window).
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# S3 -> EventBridge. WITHOUT THIS, NOTHING RUNS.
+#
+# S3 does not publish `Object Created` to EventBridge unless notifications are
+# explicitly enabled on the bucket. The rule below matches an event that would never
+# be delivered: `terraform apply` succeeds, the state machine exists, the rule exists,
+# and not one document is ever processed.
+#
+# Nothing catches this without a deployment — the rule is syntactically valid, the
+# IAM is correct, and every test passes. It was found by an audit reading the
+# resource graph for what was ABSENT rather than checking what was present.
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket_notification" "raw_to_eventbridge" {
+  bucket      = var.raw_bucket_name
+  eventbridge = true
+}
+
 resource "aws_cloudwatch_event_rule" "document_uploaded" {
   name        = "${local.state_machine_name}-uploaded"
   description = "A document landed in the raw bucket; start intake."

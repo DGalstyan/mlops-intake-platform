@@ -143,3 +143,8 @@ output "alarm_inventory" {
   description = "Generated inventory of every alarm, its threshold, and whether it measures model quality or system health. Rendered by `make alarm-inventory`."
   value       = module.observability.alarm_inventory
 }
+
+output "model_package_group_name" {
+  description = "Model Package Group. Managed by Terraform so `make destroy` removes it along with its versions — it was previously created by boto3 and survived teardown."
+  value       = aws_sagemaker_model_package_group.classifier.model_package_group_name
+}

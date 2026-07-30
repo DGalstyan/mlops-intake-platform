@@ -42,5 +42,10 @@ module "intake" {
   enable_xray        = var.enable_xray
   log_retention_days = var.log_retention_days
 
+  # The dead-letter alarm is the only data-safety alarm in the system; it must reach
+  # a human. Wired here rather than left to a later milestone, which is how it ended
+  # up unwired the first time.
+  alarm_sns_topic_arns = [module.observability.alarm_topic_arn]
+
   tags = local.common_tags
 }

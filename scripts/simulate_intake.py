@@ -199,6 +199,7 @@ def run_document(
     bedrock_mode: str,
     bucket: str = "intake-raw-dev",
     version_id: str = "v1",
+    force_override: bool = False,
 ) -> Trace:
     """Walk the intake states for one document."""
     key = f"incoming/{document.doc_id}.pdf"
@@ -267,15 +268,6 @@ def run_document(
         auto_approve_eligible=classification["auto_approve_eligible"],
         true_label=document.label,
     )
-
-    # --- Route (Choice) ---
-    if predicted in ALWAYS_REVIEW_CLASSES:
-        route_note = "business rule: always review"
-    elif not classification["auto_approve_eligible"]:
-        route_note = "low confidence"
-    else:
-        route_note = "eligible for auto-approval"
-    trace.record("Route", next="FetchExtractionPrompt", reason=route_note)
 
     # --- FetchExtractionPrompt ---
     prompt = prompts[predicted]
@@ -377,7 +369,22 @@ def run_document(
     # --- reviewer acts, out of band, through the real review API logic ---
     stepfunctions = FakeStepFunctions()
     store = SimulatedReviewStore(tables)
-    corrected_class = document.label  # the reviewer sees the document and is right
+    # What class the reviewer decides. Defaults to the true label — the reviewer reads
+    # the document and is right — but `force_override` makes the reviewer disagree with
+    # the model, which is the case that produces an actual correction.
+    #
+    # An earlier version always used the true label AND selected a document the model
+    # classifies correctly, so `corrected_class == predicted_class` and the trace
+    # labelled "human-corrected" recorded a CONFIRMATION. The override path, which is
+    # what generates labelled training data and increments HumanOverride, was untraced.
+    corrected_class = document.label
+    if force_override:
+        # The reviewer disagrees with the model. Picking any class other than the
+        # predicted one produces a real correction rather than a confirmation.
+        corrected_class = next(
+            label for label in DOCUMENT_CLASSES if label != predicted
+        )
+
     api_result = submit_correction(
         {
             "correlation_id": correlation_id,
@@ -510,6 +517,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         bedrock_mode="good",
     )
 
+    # A genuine OVERRIDE — the reviewer changes the class. This is the trace M3's
+    # deliverable actually asks for: it produces a labelled correction with
+    # was_prediction_correct=false and drives the HumanOverride counter that M5 uses
+    # as its concept-drift proxy.
+    override_doc = next(
+        d for d in probes if d.label == "medical_report" and d.doc_id != review_doc.doc_id
+    )
+    override_trace = run_document(
+        document=override_doc,
+        classifier=classifier,
+        prompts=prompts,
+        tables=tables,
+        bedrock_mode="good",
+        force_override=True,
+    )
+
     # Idempotency: redeliver the auto-approved document unchanged.
     duplicate_trace = run_document(
         document=auto_doc,
@@ -531,7 +554,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     outputs = {
         "trace-auto-approved.json": auto_trace.to_dict(),
-        "trace-human-corrected.json": review_trace.to_dict(),
+        "trace-human-confirmed.json": review_trace.to_dict(),
+        "trace-human-corrected.json": override_trace.to_dict(),
         "trace-duplicate-delivery.json": duplicate_trace.to_dict(),
         "trace-schema-failure.json": invalid_trace.to_dict(),
     }

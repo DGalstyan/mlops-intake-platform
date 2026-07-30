@@ -18,7 +18,7 @@ system-health alarm can be green while the model is quietly wrong — which is t
 whole reason the model-quality proxies exist. None of them measures accuracy:
 there is no ground truth in production.
 
-**11 alarms**, 2 in `endpoint`, 1 in `intake`, 8 in `observability`.
+**10 alarms**, 2 in `endpoint`, 1 in `intake`, 7 in `observability`.
 
 | Alarm | Measures | Module |
 |---|---|---|
@@ -31,7 +31,6 @@ there is no ground truth in production.
 | `intake-dev-intake-latency-p95-high` | system health | `observability` |
 | `intake-dev-intake-executions-failed` | system health | `observability` |
 | `intake-dev-human-override-rate-high` | model quality (primary proxy) | `observability` |
-| `intake-dev-review-backlog-high` | operational risk (review tasks expire) | `observability` |
 | `intake-dev-schema-failure-rate-high` | model quality (extraction) | `observability` |
 
 ---
@@ -114,14 +113,6 @@ there is no ground truth in production.
 - **What breaks:** nothing operationally; the model is getting the reviewed slice wrong more often.
 - **First response:** pull the corrections table for the affected class and compare against the golden set. This is the trigger for considering a retrain.
 - **Caveat:** the denominator is only documents humans SAW — low-confidence and always-review classes. It is blind to confidently-wrong documents, which is why it cannot be treated as an accuracy measurement.
-- **Notifies:** the platform SNS topic (`intake-<env>-alarms`). No email is subscribed by default — an unconfirmed email subscription looks configured while delivering nothing.
-
-### `intake-dev-review-backlog-high`
-
-- **Measures:** operational risk (review tasks expire)
-- **Fires when:** More than ${var.review_backlog_ceiling} documents are waiting for human review.
-- **What breaks:** not the system — but review tasks expire after 7 days and then DEAD-LETTER, so an undrained backlog becomes data loss on a timer.
-- **First response:** check whether the arrival rate rose or the review rate fell. If the backlog is from an auto-approval-rate drop, fix that first — adding reviewers treats the symptom.
 - **Notifies:** the platform SNS topic (`intake-<env>-alarms`). No email is subscribed by default — an unconfirmed email subscription looks configured while delivering nothing.
 
 ### `intake-dev-schema-failure-rate-high`

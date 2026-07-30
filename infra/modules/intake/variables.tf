@@ -143,3 +143,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "alarm_sns_topic_arns" {
+  description = "SNS topics the dead-letter alarm publishes to. Empty means the one data-safety alarm in the system notifies nobody, which is how it shipped before an audit caught it."
+  type        = list(string)
+  default     = []
+}

@@ -1,5 +1,5 @@
 {
-  "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00001.pdf#v1",
+  "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1",
   "step_count": 20,
   "states_entered": [
     "Prepare",
@@ -18,7 +18,7 @@
     "CreateReviewTask.resumed",
     "PersistCorrection",
     "CheckOverride",
-    "EmitOverriddenMetrics",
+    "EmitConfirmedMetrics",
     "StoreReviewedResult",
     "MarkLedgerComplete",
     "Succeed"
@@ -26,8 +26,8 @@
   "steps": [
     {
       "state": "Prepare",
-      "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00001.pdf#v1",
-      "idempotency_key": "intake-raw-dev#incoming/doc-medical_report-00001.pdf#v1"
+      "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1",
+      "idempotency_key": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1"
     },
     {
       "state": "ClaimIdempotencyKey",
@@ -41,9 +41,9 @@
     },
     {
       "state": "NormalizeOcr",
-      "char_count": 174,
+      "char_count": 190,
       "line_count": 3,
-      "content_sha256": "sha256:72aacdb63b65c8a7..."
+      "content_sha256": "sha256:bee3a4e5aa74a8e1..."
     },
     {
       "state": "CheckEmptyDocument",
@@ -52,7 +52,7 @@
     {
       "state": "Classify",
       "predicted_class": "medical_report",
-      "confidence": 0.9952,
+      "confidence": 0.9762,
       "auto_approve_eligible": true,
       "true_label": "medical_report"
     },
@@ -89,19 +89,19 @@
       "state": "CreateReviewTask",
       "status": "PENDING_REVIEW",
       "review_reason": "BUSINESS_RULE_ALWAYS_REVIEW",
-      "task_token": "tok-a98d2622bc2cc102",
+      "task_token": "tok-62e4ccfcd68291be",
       "waiting": true
     },
     {
       "state": "ReviewApi.submitCorrection",
       "reviewer_id": "reviewer-eng-07",
-      "corrected_class": "invoice",
-      "prediction_was_correct": false,
+      "corrected_class": "medical_report",
+      "prediction_was_correct": true,
       "note": "out-of-band HTTP call; resumes the waiting execution via SendTaskSuccess"
     },
     {
       "state": "CreateReviewTask.resumed",
-      "task_token": "tok-a98d2622bc2cc102",
+      "task_token": "tok-62e4ccfcd68291be",
       "output_keys": [
         "corrected_class",
         "corrected_fields",
@@ -114,22 +114,22 @@
       "state": "PersistCorrection",
       "table": "corrections",
       "original_predicted_class": "medical_report",
-      "corrected_class": "invoice",
-      "was_prediction_correct": false,
+      "corrected_class": "medical_report",
+      "was_prediction_correct": true,
       "note": "labelled training data, with provenance"
     },
     {
       "state": "CheckOverride",
-      "prediction_was_correct": false,
-      "next": "EmitOverriddenMetrics"
+      "prediction_was_correct": true,
+      "next": "EmitConfirmedMetrics"
     },
     {
-      "state": "EmitOverriddenMetrics",
+      "state": "EmitConfirmedMetrics",
       "namespace": "Intake/Platform",
       "metrics": [
         "DocumentsProcessed",
         "HumanReviewed",
-        "HumanOverride"
+        "HumanConfirmed"
       ],
       "note": "separate counters so HumanOverrideRate has a denominator of documents actually reviewed"
     },

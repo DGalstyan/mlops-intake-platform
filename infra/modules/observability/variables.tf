@@ -142,6 +142,17 @@ variable "estimated_cost_per_document_ceiling_usd" {
   default     = 0.02
 }
 
+variable "review_age_warning_hours" {
+  description = <<-EOT
+    Alarm when the oldest pending review has waited this long. Review tasks expire at
+    7 days and then dead-letter, so 48h leaves ample room to react before anything is
+    lost. Measured as an AGE rather than a queue depth because expiry is a deadline:
+    a hundred tasks queued this morning are fine, one task queued six days ago is not.
+  EOT
+  type        = number
+  default     = 48
+}
+
 variable "review_backlog_ceiling" {
   description = <<-EOT
     Alarm if this many documents are waiting for human review. A backlog is not a

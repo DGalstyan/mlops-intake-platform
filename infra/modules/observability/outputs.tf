@@ -67,12 +67,6 @@ output "alarm_inventory" {
         measures  = "system health"
         threshold = "p95 > ${var.end_to_end_latency_p95_seconds}s over 2x15min"
       },
-      {
-        name      = aws_cloudwatch_metric_alarm.review_backlog_high[0].alarm_name
-        category  = "pipeline health"
-        measures  = "operational risk (expiring review tasks)"
-        threshold = "> ${var.review_backlog_ceiling} pending over 2x1h"
-      },
     ] : [],
   )
 }

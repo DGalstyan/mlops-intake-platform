@@ -1,6 +1,6 @@
 {
-  "proved": 5,
-  "caught": 5,
+  "proved": 6,
+  "caught": 6,
   "results": [
     {
       "regression": "inference-contract-rename",
@@ -33,6 +33,15 @@
       "regression": "drift-baseline-uses-training-confidence",
       "test": "tests/test_drift.py::TestFalsePositiveRegressions::test_confidence_reference_is_held_out_not_training",
       "why_it_matters": "A model is more confident on documents it memorised. Sourcing the baseline's confidence reference from training data makes every production window report ~15% decay that is really memorisation \u2014 a permanent false alarm from day one, which gets the detector muted.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    },
+    {
+      "regression": "metrics-dimension-mismatch",
+      "test": "tests/test_observability.py::TestMetricEmission::test_every_consumed_metric_is_emitted_with_the_dimensions_it_is_queried_by",
+      "why_it_matters": "CloudWatch treats the dimension SET as part of a metric's identity and does not roll up. Emitting [Environment, DocumentClass] while the alarms query [Environment] leaves 6 of 11 alarms in INSUFFICIENT_DATA forever \u2014 and with treat_missing_data=notBreaching they never fire, while looking perfectly configured. This was live in the repo; two tests passed throughout because they compared metric NAMES only.",
       "passes_on_clean_code": true,
       "fails_on_injected_regression": true,
       "status": "CAUGHT",

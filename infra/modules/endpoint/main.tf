@@ -37,7 +37,16 @@ locals {
 # the golden-set metrics and lineage recorded in M1.
 # ---------------------------------------------------------------------------
 resource "aws_sagemaker_model" "this" {
-  name                     = local.model_name
+  # `name` is deliberately OMITTED so the provider generates a unique one per
+  # revision. Changing model_package_arn forces replacement, and with a STATIC name
+  # plus create_before_destroy Terraform tries to create the replacement while the
+  # outgoing resource still holds that name — SageMaker returns "Cannot create already
+  # existing model". Every endpoint UPDATE therefore failed, which is exactly and only
+  # the path the canary deployment runs on: M2's headline deliverable was structurally
+  # unreachable on the second apply.
+  #
+  # aws_sagemaker_model does not support name_prefix, so omission is the mechanism.
+  # The Name tag carries the readable identity.
   execution_role_arn       = var.execution_role_arn
   enable_network_isolation = false
 
@@ -58,7 +67,10 @@ resource "aws_sagemaker_model" "this" {
 # Endpoint configuration — data capture and the production variant.
 # ---------------------------------------------------------------------------
 resource "aws_sagemaker_endpoint_configuration" "this" {
-  name        = local.endpoint_config_name
+  # name_prefix for the same reason as the model above: the endpoint config is
+  # replaced on every variant change, and the replacement cannot take a name the
+  # outgoing one still holds.
+  name_prefix = "${local.endpoint_config_name}-"
   kms_key_arn = var.kms_key_arn
 
   production_variants {

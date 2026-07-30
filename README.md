@@ -18,18 +18,19 @@ detection.
 ## Build status
 
 This is the honest current state. **No AWS resource has ever been created from this
-repo** — there are no credentials on the machine it was built on. M0–M3 are written
-and tested locally; M4–M6 are not started.
+repo** — there are no credentials on the machine it was built on. All seven
+milestones have code; none of it has been deployed. What that means per milestone is
+in the table below, and what is *unverified* about each is in Known gaps.
 
 | Milestone | Status | What exists |
 |---|---|---|
 | **M0** Foundations (IaC) | **Code complete, never applied** | `infra/` — state backend, KMS, ECR, 4 buckets, per-component IAM. `terraform validate` + `fmt` clean on all three roots. |
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
-| **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
-| **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
+| **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 30-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger (S3 notifications enabled on the bucket), review API. Local simulation produces the two required traces. |
+| **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 10 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
 | **M5** Drift + Retraining | **Drift detection working with real evidence; retrain SM written, never run; no Terraform** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Retrain state machine with the gate and no deploy path. |
-| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 343 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
+| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 346 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
 account, because no AWS credentials are configured. So `fmt` and `validate` are
@@ -60,7 +61,7 @@ Nothing here has been deployed.
 
 ```
 [~] S3 upload ──► EventBridge ──► Step Functions "intake" state machine
-    (ASL + handlers written and tested; no Terraform, so nothing deploys)
+    (ASL, handlers and Terraform written and tested; never deployed)
                                        │
                                        ├─ 1. OCR            (Textract)
                                        ├─ 2. Classify       (SageMaker endpoint)
@@ -72,7 +73,7 @@ Nothing here has been deployed.
                                                                                       │
                          ┌────────────────────────────────────────────────────────────┘
                          ▼
-[ ]     Step Functions "retrain" state machine
+[~]     Step Functions "retrain" state machine  (ASL written; no Terraform)
           train ──► evaluate vs champion ──► gate ──► Model Registry (PendingManualApproval)
                                                               │ human approval event
                                                               ▼
@@ -125,7 +126,7 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 343 tests, mypy-strict clean
+make test            # 346 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
@@ -222,7 +223,7 @@ threshold; the chosen point puts ~12% of documents into human review.
 
 `register.py` **refuses** to attach anything that is not the golden variant, so
 the labelling is load-bearing rather than advisory. The full model-quality vs
-system-health discussion belongs to M4 and is not written yet.
+system-health discussion is in the Observability section below.
 
 ### Calibration is a correctness property here, not a tuning detail
 
@@ -475,7 +476,7 @@ asserting it never becomes a dimension.
 
 ### Alarms
 
-11 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
+10 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
 — generated from the Terraform by `make alarm-inventory`, with a test asserting the
 committed file matches a fresh render. Each carries what breaks, the first response,
 and a runbook link in its own description, because an alarm that fires at 3am without
@@ -579,7 +580,7 @@ Six milestones of code, none of it deployed. The split is worth stating plainly
 because it is the whole character of this submission:
 
 **Verified, by something other than my own assertion**
-- 343 tests, `mypy --strict` on 35 files, `ruff` clean, `terraform validate` on three roots
+- 346 tests, `mypy --strict` on 35 files, `ruff` clean, `terraform validate` on three roots
 - A **green PR and main run on GitHub Actions** — real CI, which caught three bugs local
   development had masked, including a container that could not have started on SageMaker
 - Five regression tests **proved** to fail on the regressions they target
@@ -607,9 +608,9 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
 **Blocking, and the reason everything else is unverified**
 
 - **No AWS credentials were available during the build**, so `terraform plan`,
-  `apply` and `destroy` have never run. Three of M0's five acceptance criteria
-  are consequently unmet, and `evidence/` is empty. This is the first thing to
-  fix.
+  `apply` and `destroy` have never run. Three of M0's five acceptance criteria are
+  consequently unmet. `evidence/` holds what could be produced without an account —
+  see [`evidence/README.md`](./evidence/README.md), which leads with what is absent.
 
 **M6 specifically**
 
@@ -751,11 +752,13 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
 
 **Known-incomplete by design**
 
-- **The `ci-deploy` role cannot run `terraform apply`.** It can push images and
-  read/write its own state key, and nothing more. Granting the create
-  permissions for resources that don't exist yet would have meant wildcards, so
-  the policy grows per-milestone. M6 closes it; until then the deploy path is a
-  human running `make apply`.
+- **The `ci-deploy` role's apply permissions are scoped by resource TAG, not by
+  ARN.** Terraform names resources at apply time, so an ARN allowlist would be
+  either incomplete or a wildcard; every resource carries `project=intake` via
+  `default_tags` and the policy conditions on that. `iam:CreateRole` is
+  deliberately still absent — a CI role that can mint IAM roles can escalate to
+  anything, and no tag condition prevents it. Bootstrapping IAM stays human.
+  **Never exercised**: no workflow has assumed this role.
 - **No Lambda IAM roles.** A role scoped to a function that doesn't exist can
   only be empty or wrong. Each is created with its function.
 - **The state-machine role is trust-only** — no permission policy at all until
@@ -775,11 +778,46 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   needs to retire it. Untested — and it is the most likely cause if `make
   destroy` ever fails.
 
-**Not started**
+**Found by an audit after M7, and fixed — worth naming because they were invisible
+to every test that existed**
 
-- `docs/runbook.md` (the 3am 5xx page) does not exist.
-- `src/`, `schemas/`, `statemachines/`, `tests/` are empty.
-- No CI workflows.
+- **Nothing triggered the pipeline.** No `aws_s3_bucket_notification { eventbridge =
+  true }` existed, so S3 would never have published `Object Created`. Apply succeeded,
+  the rule matched an event that was never delivered, and no document would ever have
+  been processed.
+- **Six of eleven alarms could never have fired.** Metrics were emitted with
+  `[Environment, DocumentClass]` while every alarm queried `[Environment]`. CloudWatch
+  treats the dimension set as part of a metric's identity and does not roll up, so
+  those alarms would have sat in `INSUFFICIENT_DATA` permanently — and two tests
+  passed throughout because they compared metric *names* only.
+- **Human review was capped at 24 hours, not 7 days.** The execution timeout was
+  shorter than the review state's, and a `States.Timeout` raised by the execution
+  limit is not catchable — so the dead-letter path was unreachable and a document
+  parked over a weekend was lost silently.
+- **The canary could never have run.** Static resource names plus
+  `create_before_destroy` meant every endpoint *update* — the only path a canary takes
+  — failed with "cannot create already existing".
+- **The dead-letter alarm notified nobody**, `make destroy` failed on a clean clone,
+  and the Model Package Group was created outside Terraform so it survived teardown.
+
+Each now has a test. The dimension mismatch is in the regression-proof harness, so it
+is verified to fail on the real defect rather than merely asserted.
+
+**Still genuinely absent**
+
+- The M5 Terraform: the drift Lambda, its schedule, the retrain state machine and
+  the EventBridge rule on registry approval. The retrain ASL exists and its
+  placeholders are substituted by nothing.
+- Audit sampling of confidently auto-approved documents — the single highest-value
+  addition, and the fix for both the Q2 blind spot and the retraining bias.
+- An X-Ray annotation on `correlation_id`, without which the runbook's
+  trace-by-document query returns nothing.
+- **Review-queue ageing is unmonitored.** Tasks expire at 7 days and then
+  dead-letter, so an undrained queue is data loss on a deadline — but the right
+  metric (age of the oldest pending review) needs a scheduled scan that does not
+  exist. Two wrong alarms were written before this was admitted: one measuring
+  arithmetic that evaluated to the auto-approved count, one reading a metric with no
+  publisher. A documented gap beats an alarm that cannot fire.
 
 ---
 

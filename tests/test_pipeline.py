@@ -632,15 +632,20 @@ class TestSimulatorMatchesAsl:
         }
         assert asl_classes == set(simulate_intake.ALWAYS_REVIEW_CLASSES)
 
-    def test_route_state_uses_the_same_always_review_set(
+    def test_there_is_exactly_one_routing_gate(
         self, states: dict[str, Any]
     ) -> None:
-        route_classes = {
-            choice["StringEquals"]
-            for choice in states["Route"]["Choices"]
-            if choice.get("Variable") == "$.classification.predicted_class"
-        }
-        assert route_classes == set(simulate_intake.ALWAYS_REVIEW_CLASSES)
+        """The auto-approve decision must be made in one place.
+
+        An earlier revision had a `Route` state whose three Choice branches all led to
+        the same next state — a no-op whose Comment called it "the routing gate", while
+        the real decision was made later in DecideOutcome. Two states claiming to route
+        is how the confidence threshold ends up applied twice, or inconsistently.
+        """
+        assert "Route" not in states, (
+            "a `Route` state exists again; DecideOutcome is the routing gate"
+        )
+        assert states["DecideOutcome"]["Type"] == "Choice"
 
     def test_review_reasons_match_the_asl_markers(self, states: dict[str, Any]) -> None:
         asl_reasons = {
@@ -692,6 +697,38 @@ class TestSimulatorMatchesAsl:
         assert not unknown, (
             f"the simulator records states the ASL does not define: {unknown}. The "
             "traces in evidence/m3/ would describe a workflow that does not exist."
+        )
+
+        # The OTHER direction, which the first version of this test omitted. Checking
+        # only `recorded - states` means an ASL state the simulator never enters
+        # produces no failure — so a whole branch can be added to the definition and
+        # remain completely untraced while this test stays green. The docstring
+        # claimed it "would have caught M4's metric states being added to the ASL and
+        # not to the simulator"; one-directional, it would not have.
+        #
+        # `unsimulated` is an explicit allowlist rather than an assertion of zero:
+        # some states genuinely cannot be reached by a simulation that stubs the
+        # services that fail. Each entry is a stated gap, not a silent one.
+        unsimulated_by_design = {
+            # The dead-letter path needs a service call to fail. The simulator's stubs
+            # succeed by construction, so nothing reaches it. THIS IS A REAL GAP: the
+            # dead-letter path is the least-tested branch in the workflow.
+            "DeadLetter",
+            "EmitDeadLetterMetric",
+            "FailedTerminal",
+            "ExtractionUnavailable",
+            # Marker Pass states the simulator collapses into its DecideOutcome record.
+            "MarkBusinessRule",
+            "MarkLowConfidence",
+            # A pure JSONPath reshape with no behaviour to simulate.
+            "UnpackClassification",
+        }
+        never_entered = sorted(set(states) - recorded - unsimulated_by_design)
+        assert not never_entered, (
+            f"these ASL states are never exercised by the simulation: {never_entered}. "
+            "Either add a scenario that reaches them, or add them to "
+            "`unsimulated_by_design` with a reason — an untraced branch is a branch "
+            "the evidence says nothing about."
         )
 
     def test_metric_emission_appears_in_both(
@@ -770,10 +807,23 @@ class TestSimulationOutputs:
         self, run: dict[str, Any]
     ) -> None:
         summary = run["simulation-summary"]
-        # Four documents run, one of them a redelivery: three results, not four.
-        assert summary["results_written"] == 3
-        assert summary["review_tasks_created"] == 2
-        assert summary["corrections_recorded"] == 2
+        # The INVARIANT, not a magic number: exactly one ledger entry and one result
+        # per distinct document, and the redelivery adds neither. Hardcoded counts
+        # broke the moment a scenario was added, which taught nothing — the property
+        # that matters is that a duplicate contributes nothing.
+        duplicate = run["trace-duplicate-delivery"]
+        assert duplicate["states_entered"] == [
+            "Prepare",
+            "ClaimIdempotencyKey",
+            "DuplicateDelivery",
+        ], "the redelivery did work it should have short-circuited"
+
+        assert summary["results_written"] == summary["ledger_entries"], (
+            "every claimed document must produce exactly one result"
+        )
+        assert summary["corrections_recorded"] == summary["review_tasks_created"], (
+            "every review task that was completed must have persisted a correction"
+        )
 
     def test_schema_failure_routes_to_review(self, run: dict[str, Any]) -> None:
         trace = run["trace-schema-failure"]

@@ -30,7 +30,10 @@ def alarms() -> list[render_alarm_inventory.Alarm]:
 
 class TestAlarmCoverage:
     def test_alarms_are_found(self, alarms: list[Any]) -> None:
-        assert len(alarms) >= 11, f"only found {len(alarms)} alarms"
+        # 10 after the review-ageing alarm was removed: it read a metric nothing
+        # emits, which is the defect this module was fixed for. An alarm that cannot
+        # fire is worse than a documented gap.
+        assert len(alarms) >= 10, f"only found {len(alarms)} alarms"
 
     def test_every_alarm_is_classified(self, alarms: list[Any]) -> None:
         """The model-quality vs system-health split must be explicit on every alarm.
@@ -166,6 +169,81 @@ class TestMetricEmission:
         orphans = sorted(consumed_metrics - emitted_metrics)
         assert not orphans, (
             f"the dashboard/alarms read metrics that are never emitted: {orphans}"
+        )
+
+    def test_every_consumed_metric_is_emitted_with_the_dimensions_it_is_queried_by(
+        self, emitted_metrics: set[str]
+    ) -> None:
+        """The test that would have caught the defect this file's other tests missed.
+
+        CloudWatch treats the dimension SET as part of a metric's identity and does not
+        roll up across dimensions. A datum written as [Environment, DocumentClass] is
+        invisible to a query for [Environment] alone: the alarm sits in
+        INSUFFICIENT_DATA forever, and with treat_missing_data=notBreaching it never
+        fires — while looking perfectly configured in the console.
+
+        That was live in this repo. Every business metric was emitted with two
+        dimensions and every alarm queried one, so 6 of 11 alarms could never fire and
+        most of the dashboard rendered blank. Two tests in this file passed throughout:
+        one compared metric NAMES only, and the other asserted `"Environment" in
+        dimensions`, which is true of the two-dimension form.
+
+        Comparing names is not enough. The identity is (name, dimension set).
+        """
+        definition = json.loads(ASL.read_text(encoding="utf-8"))
+
+        # (metric name, frozenset of dimension names) actually written.
+        emitted: set[tuple[str, frozenset[str]]] = set()
+        for state in definition["States"].values():
+            resource = state.get("Resource")
+            if not isinstance(resource, str) or "putMetricData" not in resource:
+                continue
+            for datum in state["Parameters"]["MetricData"]:
+                emitted.add(
+                    (
+                        datum["MetricName"],
+                        frozenset(dim["Name"] for dim in datum["Dimensions"]),
+                    )
+                )
+
+        # What the observability module queries. `dimensions = local.dim` is
+        # {Environment}; dashboard widgets name dimensions positionally after the
+        # metric name.
+        consumed: set[tuple[str, frozenset[str]]] = set()
+        for tf in (REPO / "infra" / "modules" / "observability").glob("*.tf"):
+            text = tf.read_text(encoding="utf-8")
+            # Alarm metric_query blocks: metric_name + `dimensions = local.dim`.
+            for name in re.findall(
+                r'metric_name\s*=\s*"([A-Za-z0-9]+)"\s*\n\s*dimensions\s*=\s*local\.dim',
+                text,
+            ):
+                consumed.add((name, frozenset({"Environment"})))
+            # Direct alarm form: namespace/metric_name/dimensions = local.dim.
+            for name in re.findall(
+                r'metric_name\s*=\s*"([A-Za-z0-9]+)"[\s\S]{0,400}?dimensions\s*=\s*local\.dim',
+                text,
+            ):
+                consumed.add((name, frozenset({"Environment"})))
+            # Dashboard widgets: [local.ns, "Name", "Environment", var.environment, ...]
+            for name, tail in re.findall(
+                r'\[local\.ns,\s*"([A-Za-z0-9]+)",\s*"Environment",\s*var\.environment([^\]]*)\]',
+                text,
+            ):
+                dims = {"Environment"}
+                if "DocumentClass" in tail:
+                    dims.add("DocumentClass")
+                consumed.add((name, frozenset(dims)))
+
+        assert consumed, "found no consumed metrics — the parser is broken"
+
+        ours = {(n, d) for n, d in consumed if n in emitted_metrics}
+        missing = sorted(
+            (name, sorted(dims)) for name, dims in ours - emitted
+        )
+        assert not missing, (
+            "the dashboard/alarms query these (metric, dimensions) combinations, "
+            f"which are never emitted with that dimension set: {missing}. "
+            "CloudWatch will return no data and the alarm will never fire."
         )
 
     def test_metrics_are_dimensioned_by_environment(self) -> None:

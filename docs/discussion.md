@@ -19,13 +19,16 @@ aws sagemaker describe-endpoint --endpoint-name intake-classifier-dev --query En
 automatic rollback is how you end up with a half-shifted endpoint. If it already
 rolled back, the incident is over and the question becomes why the variant was slow.
 
-**Then: is it the model or the machinery?** These have different fixes and the
-dashboard is arranged to separate them.
+**Then: is it the model or the machinery?** These have different fixes.
 
-- `ModelLatency` up but `OverheadLatency` flat → the model itself got slower.
-- `OverheadLatency` up → SageMaker's side: instance replacement, cold start, or the
-  container failing readiness and traffic being retried.
-- Both flat but end-to-end `ExecutionTime` up → not the endpoint at all. Textract or
+`ModelLatency` is on the dashboard; **`OverheadLatency` is not, and that is a gap** —
+it is the metric that separates "the model got slower" from "SageMaker's routing,
+cold starts or readiness failures got slower", and adding it is a one-line dashboard
+change I would make before the next incident. In its absence:
+
+- `ModelLatency` up → the model itself, or the documents it is being given.
+- `ModelLatency` flat but end-to-end `ExecutionTime` up → not the endpoint at all.
+  Textract or
   Bedrock is throttling and the state machine is retrying with backoff, which is the
   retry policy working. Check `psi`-style token counts too: a longer document is a
   slower document all the way through.
@@ -127,6 +130,21 @@ made this a rewrite:
 3. **The IAM policy names the model variable, not a wildcard.** No `bedrock:*` to
    forget to narrow later.
 
+**Where that one-line claim breaks, and it does:** the successor to a pinned Claude
+model is generally **not invocable via a bare `foundation-model/<id>` ARN**. Current
+models are served through cross-region **inference profiles**, which means:
+
+- a different ARN shape (`application-inference-profile/` or `inference-profile/`),
+- `bedrock:InvokeModel` on **both** the profile ARN *and* the underlying
+  `foundation-model` ARNs in **every region the profile spans**, not just ours,
+- so `infra/modules/intake/statemachine.tf`'s single-ARN statement becomes a
+  multi-ARN, multi-region policy.
+
+That is a policy restructure, not a tfvars edit — perhaps two hours rather than two
+minutes, and it is not hypothetical: the pinned `claude-3-5-haiku` is already a
+legacy model. The parts that genuinely *are* one line are the model id itself and the
+prompt (which needs no change at all); the IAM is not.
+
 **What is NOT automated, and should not be:**
 
 - **The prices.** `config/prices.json` is per-model, and a swap without updating it
@@ -139,8 +157,10 @@ made this a rewrite:
   With 30 days I would build a small extraction eval set — 50 documents with
   hand-checked fields — and diff old model against new before switching.
 
-**Rollback:** it is a tfvars revert plus an apply. No image rebuild, because the model
-id is not baked into anything.
+**Rollback:** a tfvars revert plus an apply, with no image rebuild, because the model
+id is not baked into anything. Note the apply itself is the constraint — the CI deploy
+role's permissions have never been exercised, so the first rollback would be a human
+running `make apply`.
 
 ---
 

@@ -270,5 +270,11 @@ resource "aws_cloudwatch_metric_alarm" "dead_letter_not_empty" {
     QueueName = aws_sqs_queue.dead_letter.name
   }
 
+  # An earlier revision left these empty with a comment saying "M4 attaches the SNS
+  # action". M4 shipped and nothing wired it, so the single data-safety alarm in the
+  # system notified nobody while appearing in the generated inventory as configured.
+  alarm_actions = var.alarm_sns_topic_arns
+  ok_actions    = var.alarm_sns_topic_arns
+
   tags = merge(var.tags, { measures = "data safety", Name = "${local.table_prefix}-dlq-not-empty" })
 }

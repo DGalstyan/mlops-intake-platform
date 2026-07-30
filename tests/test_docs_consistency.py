@@ -71,13 +71,15 @@ class TestReadmeCounts:
         if not claimed:
             pytest.skip("the README asserts no test count")
         actual = collected_test_count()
-        # Allow a small band: the exact figure moves with every added test, and a
-        # test that fails on every commit gets deleted. An order-of-magnitude claim
-        # is what matters.
+        # EXACT. The ±10 band this used to allow was self-defeating: the drift it
+        # exists to catch is usually a handful of tests, so the tolerance covered
+        # precisely the cases it was written for. An audit found the README claiming
+        # 343 while 344 were collected — inside the old band, and the check that was
+        # supposed to prevent exactly that passed.
         for value in claimed:
-            assert abs(value - actual) <= 10, (
+            assert value == actual, (
                 f"README claims {value} tests; {actual} are collected. "
-                "Update it or stop asserting a count."
+                "Update it (`make test` prints the number) or stop asserting a count."
             )
 
     def test_alarm_count_matches_the_terraform(self, readme: str) -> None:
@@ -158,10 +160,12 @@ class TestEvidenceIndex:
             for folder in evidence.iterdir()
             if folder.is_dir() and not (folder / "README.md").is_file()
         ]
-        # m1, m2 carry their caveat in a named document rather than README.md.
-        allowed = {"m1", "m2"}
-        assert not (set(missing) - allowed), (
-            f"evidence folders with no README: {sorted(set(missing) - allowed)}"
+        # No allowlist. An earlier version whitelisted m1 and m2 by name — a test
+        # written around the gap it exists to prevent, which is worse than no test
+        # because it reports green on the thing it is meant to catch.
+        assert not missing, (
+            f"evidence folders with no README: {sorted(missing)}. Every folder needs "
+            "its own caveat: a reader lands in one without reading the index."
         )
 
     def test_index_states_nothing_is_deployed(self) -> None:

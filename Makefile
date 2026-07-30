@@ -105,7 +105,7 @@ apply: init package-lambdas
 #      the console without a friendly name. Nothing can shorten this.
 #
 # Everything else is gone when this returns. See the README teardown section.
-destroy: init
+destroy: init package-lambdas
 	cd $(ENV_DIR) && terraform destroy -var-file="$(ENV).tfvars"
 	@echo ""
 	@echo "NOTE: the KMS key for ENV=$(ENV) is now PendingDeletion for 7 days"
