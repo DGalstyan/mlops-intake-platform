@@ -95,14 +95,15 @@ Why each signal stays green:
 **Which metric should have caught it:** none of the current ones could. The two that
 would:
 
-- **Per-field null rate and extraction confidence, dimensioned by document class.** A
-  field silently coming back null on 30% of one class is the actual signal. Today the
-  platform tracks *validation failures*, not per-field null rates — so "the model
-  returned null for `due_date`" is only visible if null makes the document invalid.
-- **An audit sample of confidently auto-approved documents.** Routing a small random
-  percentage to human review anyway is the only mechanism that observes the
-  auto-approved population at all. It is also the fix for the sampling bias in Q7 —
-  one change addresses both, which is why it is the highest-value thing missing.
+- **Per-field null rate and extraction confidence, dimensioned by document
+  class.** A field silently coming back null on 30% of one class is the actual
+  signal. Today the platform tracks *validation failures*, not per-field null
+  rates, so "the model returned null for `due_date`" is only visible if null
+  makes the document invalid. - **An audit sample of confidently auto-approved
+  documents.** Routing a small random percentage to human review anyway is the
+  only mechanism that observes the auto-approved population at all. It is also
+  the fix for the sampling bias in Q7 — one change addresses both, which is why
+  it is the highest-value thing missing.
 
 ---
 
@@ -243,9 +244,10 @@ file. The dashboard moves to top-N-by-volume plus an "other" aggregate. The
 always-review flag becomes a property in the schema, read by the state machine from
 the same DynamoDB item as the prompt.
 
-That is a day of work and no architectural change — which is the useful answer here.
-The part that *is* architectural is the classifier: 40 classes wants a different model
-and probably a hierarchical routing step, and no amount of configuration fixes that.
+That is a day of work and no architectural change, which is the useful answer
+here. The part that *is* architectural is the classifier: 40 classes wants a
+different model and probably a hierarchical routing step, and no amount of
+configuration fixes that.
 
 ---
 
@@ -266,10 +268,10 @@ move, this is almost always it.
 grew: noisier scans, bigger documents, or a new sender. Bedrock is per-token, so
 document size *is* cost.
 
-**3. Output tokens per document.** A jump usually means the model started explaining
-itself rather than returning bare JSON — which also breaks parsing, so cross-check the
-schema-failure rate. These two moving together is a model-behaviour change, not a
-volume change.
+**3. Output tokens per document.** A jump usually means the model started
+explaining itself rather than returning bare JSON, which also breaks parsing, so
+cross-check the schema-failure rate. These two moving together is a
+model-behaviour change, not a volume change.
 
 **4. Retry storms.** A throttled Bedrock call that retries six times bills every
 attempt that reached the model. `ExecutionTime` p95 rising alongside cost points here.
@@ -296,11 +298,11 @@ exposes.
 
 ## 7. Where's the sampling bias in your retraining data, and what does it do to your model after three retrain cycles?
 
-**Where it is:** retraining data comes from human corrections. Humans only review
-documents that were **low-confidence** or in an **always-review class**. So the
-labelled set is a sample of exactly the documents the model already finds hard — and
-it is selected *by the model's own confidence*, which is the worst possible selector
-because it correlates directly with the thing being learned.
+**Where it is:** retraining data comes from human corrections. Humans only
+review documents that were **low-confidence** or in an **always-review class**.
+So the labelled set is a sample of exactly the documents the model already finds
+hard, and it is selected *by the model's own confidence*, which is the worst
+possible selector because it correlates directly with the thing being learned.
 
 **Three cycles, concretely:**
 

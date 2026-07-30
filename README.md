@@ -265,11 +265,11 @@ Two deliberate omissions:
 ### Lineage
 
 Every registered version carries the data snapshot id (a **content hash** of the
-exact training bytes, not a UUID — so an identical id proves identical input), the
-git SHA, the training image digest, and the resolved dependency versions. Missing
-values are recorded as the explicit string `unknown` rather than defaulted,
-because only an explicit unknown is detectable in review. Locally the image digest
-is legitimately unknown and training prints a warning saying so.
+exact training bytes, not a UUID, so an identical id proves identical input),
+the git SHA, the training image digest, and the resolved dependency versions.
+Missing values are recorded as the explicit string `unknown` rather than
+defaulted, because only an explicit unknown is detectable in review. Locally the
+image digest is legitimately unknown and training prints a warning saying so.
 
 ## Drift, retraining, and the sampling bias
 
@@ -292,12 +292,12 @@ Four verdicts, and only two of them retrain:
   reviewed slice wrong more often. Invisible to input-drift tests.
 - `DATA_CHANGED_AND_MODEL_DECAYED` → retrain, highest priority.
 
-**Why conflating them is a bug:** retraining in response to input drift alone spends
-money fitting the new distribution's noise, and it does so using labels sourced from
-human review — which only covers the low-confidence slice. You can make the model
-*worse* by responding to a signal that did not require a response. A single combined
-"drift score" maps these opposite situations onto the same number and prescribes the
-same action for both.
+**Why conflating them is a bug:** retraining in response to input drift alone
+spends money fitting the new distribution's noise, and it does so using labels
+sourced from human review, which only covers the low-confidence slice. You can
+make the model *worse* by responding to a signal that did not require a
+response. A single combined "drift score" maps these opposite situations onto
+the same number and prescribes the same action for both.
 
 `evidence/m5/` demonstrates this with real numbers: the deliberately shifted
 batch produces PSI **19.8** on document length, roughly 79× the
@@ -341,22 +341,21 @@ sample of exactly the documents the model already finds hard.**
 
 Three consequences, and the third is the one that matters:
 
-1. **The labelled set over-represents ambiguity.** Train naively on it and the model
-   optimises for the hard slice at the expense of the easy majority it was already
-   getting right.
-2. **Confidently-wrong documents never enter the loop.** They auto-approve, so nobody
-   reviews them, so they are never corrected, so they are never in the training data.
-   The model's *specific* blind spot is the one region the feedback loop structurally
-   cannot reach.
-3. **It compounds.** After three retrain cycles: cycle 1 shifts the decision boundary
-   toward the hard slice; more documents fall below the confidence threshold and are
-   reviewed, so cycle 2's training data is *more* biased than cycle 1's; the model
-   becomes progressively better at ambiguous documents and progressively more
-   confident about a shrinking region it never gets corrected on. **The override rate
-   can fall the whole time**, because the documents being reviewed are the ones the
-   model now handles well — so the primary quality proxy improves while real accuracy
-   degrades. That is the failure mode, and no metric currently in this platform would
-   catch it.
+1. **The labelled set over-represents ambiguity.** Train naively on it and the
+   model optimises for the hard slice at the expense of the easy majority it was
+   already getting right. 2. **Confidently-wrong documents never enter the
+   loop.** They auto-approve, so nobody reviews them, so they are never
+   corrected, so they are never in the training data. The model's *specific*
+   blind spot is the one region the feedback loop structurally cannot reach. 3.
+   **It compounds.** After three retrain cycles: cycle 1 shifts the decision
+   boundary toward the hard slice; more documents fall below the confidence
+   threshold and are reviewed, so cycle 2's training data is *more* biased than
+   cycle 1's; the model becomes progressively better at ambiguous documents and
+   progressively more confident about a shrinking region it never gets corrected
+   on. **The override rate can fall the whole time**, because the documents
+   being reviewed are the ones the model now handles well, so the primary
+   quality proxy improves while real accuracy degrades. That is the failure
+   mode, and no metric currently in this platform would catch it.
 
 **What I would do about it,** in the order I would do it:
 
@@ -684,75 +683,74 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
 **M3 specifically**
 
 - **Nothing is deployed.** The Terraform now exists and validates, but no state
-  machine, table, Lambda or API has been created. Every claim below about runtime
-  behaviour is a design claim, not an observation.
-- **The reviewer API has no real authorisation model.** The route is `AWS_IAM`
-  authorised so it is not open to the internet, but `reviewer_id` comes from the
-  request body and is trusted. "Which humans may review which documents" is a real
-  access-control question this does not answer. A shared API key would have looked
-  like an answer and been worse.
-- **The traces in `evidence/m3/` are from a local simulation, not a Step Functions
-  execution.** The routing logic, validator, correction flow and idempotency
-  semantics are genuinely exercised; Textract, Bedrock, DynamoDB and Step Functions
-  itself are stubbed. `TestSimulatorMatchesAsl` asserts the simulator has not
-  diverged from the deployed definition, which is what makes the traces worth
-  anything — but they are not the deliverable.
-- **The ASL has never been validated by the service.**
-  `aws stepfunctions validate-state-machine-definition` needs credentials.
-  `tests/test_asl.py` checks 37 structural invariants, which is a stronger check than
-  syntax in most respects, but it cannot catch an invalid intrinsic-function
-  signature or a mistyped SDK integration ARN.
-- **The `Extract` state's Bedrock request body is written for the Anthropic Messages
-  API shape and is unverified against the service.** `parse_model_json` tolerates
-  three response shapes for this reason, but the request side has one chance to be
-  right.
-- **No load or concurrency testing of the idempotency claim.** Two simultaneous
-  deliveries of the same object should have exactly one win the conditional write.
-  That is how DynamoDB conditional writes behave, but it is asserted, not observed.
+  machine, table, Lambda or API has been created. Every claim below about
+  runtime behaviour is a design claim, not an observation. - **The reviewer API
+  has no real authorisation model.** The route is `AWS_IAM` authorised so it is
+  not open to the internet, but `reviewer_id` comes from the request body and is
+  trusted. "Which humans may review which documents" is a real access-control
+  question this does not answer. A shared API key would have looked like an
+  answer and been worse. - **The traces in `evidence/m3/` are from a local
+  simulation, not a Step Functions execution.** The routing logic, validator,
+  correction flow and idempotency semantics are genuinely exercised; Textract,
+  Bedrock, DynamoDB and Step Functions itself are stubbed.
+  `TestSimulatorMatchesAsl` asserts the simulator has not diverged from the
+  deployed definition, which is what makes the traces worth anything, but they
+  are not the deliverable. - **The ASL has never been validated by the
+  service.** `aws stepfunctions validate-state-machine-definition` needs
+  credentials. `tests/test_asl.py` checks 37 structural invariants, which is a
+  stronger check than syntax in most respects, but it cannot catch an invalid
+  intrinsic-function signature or a mistyped SDK integration ARN. - **The
+  `Extract` state's Bedrock request body is written for the Anthropic Messages
+  API shape and is unverified against the service.** `parse_model_json`
+  tolerates three response shapes for this reason, but the request side has one
+  chance to be right. - **No load or concurrency testing of the idempotency
+  claim.** Two simultaneous deliveries of the same object should have exactly
+  one win the conditional write. That is how DynamoDB conditional writes behave,
+  but it is asserted, not observed.
 
 **M2 specifically**
 
 - **The headline deliverable does not exist.** M2 is graded on "a recorded bad
-  deploy that rolled back on its own". No endpoint has been deployed, so there is
-  no rollback recording. The canary policy and both rollback alarms are written and
-  validated in Terraform; whether they actually fire is **unproven**.
-- **The container image has never been built.** `docker build` was attempted and
-  hung on this machine — the daemon became unresponsive and the build was
-  abandoned rather than retried indefinitely. The `/ping` and `/invocations`
-  contract *is* verified, by 41 tests against the Flask app directly, including
-  readiness returning 503 when the model loads but cannot predict. What is
-  unverified is the image: base image resolution, the dependency install inside it,
-  and whether gunicorn starts under `serve`. `scripts/container_smoke.sh` exists to
-  check exactly that and has never run.
-- **The autoscaling target is derived from a sequential, in-process measurement on
-  faster hardware than the target instance.** It is an upper bound on capacity with
-  a guessed 0.35 derating factor. A real concurrent load test may disagree.
-- **The latency alarm threshold (1500 ms) is 7× an in-process p99** that excludes
-  HTTP framing and SageMaker overhead. The real p99 will be higher, making the
-  effective multiple smaller than intended.
-- **`termination_wait_in_seconds = 600`** keeps the old fleet alive after a shift,
-  which is what makes rollback instant — but it also means a deploy holds double
-  capacity for 10 minutes. That is a cost/safety trade I have not measured.
+  deploy that rolled back on its own". No endpoint has been deployed, so there
+  is no rollback recording. The canary policy and both rollback alarms are
+  written and validated in Terraform; whether they actually fire is
+  **unproven**. - **The container image has never been built.** `docker build`
+  was attempted and hung on this machine — the daemon became unresponsive and
+  the build was abandoned rather than retried indefinitely. The `/ping` and
+  `/invocations` contract *is* verified, by 41 tests against the Flask app
+  directly, including readiness returning 503 when the model loads but cannot
+  predict. What is unverified is the image: base image resolution, the
+  dependency install inside it, and whether gunicorn starts under `serve`.
+  `scripts/container_smoke.sh` exists to check exactly that and has never run. -
+  **The autoscaling target is derived from a sequential, in-process measurement
+  on faster hardware than the target instance.** It is an upper bound on
+  capacity with a guessed 0.35 derating factor. A real concurrent load test may
+  disagree. - **The latency alarm threshold (1500 ms) is 7× an in-process p99**
+  that excludes HTTP framing and SageMaker overhead. The real p99 will be
+  higher, making the effective multiple smaller than intended. -
+  **`termination_wait_in_seconds = 600`** keeps the old fleet alive after a
+  shift, which is what makes rollback instant, but it also means a deploy holds
+  double capacity for 10 minutes. That is a cost/safety trade I have not
+  measured.
 
 **M1 specifically**
 
 - **Nothing has run on SageMaker.** `train.py` and `evaluate.py` implement the
   script-mode and Processing-job contracts (SM_CHANNEL_TRAIN, SM_MODEL_DIR,
   SM_OUTPUT_DATA_DIR) and run correctly locally, but no training job has been
-  submitted, so no `model.tar.gz` exists in S3 and **no version has actually been
-  written to a Model Package Group.** `register.py` has only been exercised
+  submitted, so no `model.tar.gz` exists in S3 and **no version has actually
+  been written to a Model Package Group.** `register.py` has only been exercised
   `--dry-run`. The two-versions deliverable is proven as far as metrics and the
-  registration payload; the registry API call itself is unverified.
-- **The retrain gate does not read ECE.** It gates on macro-F1 margin plus a
-  per-class floor. In the v1/v2 pair above it blocked the badly-calibrated
-  candidate — but on the *margin*, incidentally, not because it noticed the
-  calibration collapse. A candidate that improved macro-F1 by 0.03 while wrecking
-  ECE would pass. Adding a calibration ceiling to the gate is the obvious fix and
-  is not done.
-- **`GATE_MIN_MACRO_F1_IMPROVEMENT = 0.02` is asserted, not derived.** It should
-  come from the measured run-to-run variance on a 240-document golden set. I have
-  not measured that variance, so the number is a plausible guess.
-- **The golden set is synthetic and drawn from the same generator as training.**
+  registration payload; the registry API call itself is unverified. - **The
+  retrain gate does not read ECE.** It gates on macro-F1 margin plus a per-class
+  floor. In the v1/v2 pair above it blocked the badly-calibrated candidate, but
+  on the *margin*, incidentally, not because it noticed the calibration
+  collapse. A candidate that improved macro-F1 by 0.03 while wrecking ECE would
+  pass. Adding a calibration ceiling to the gate is the obvious fix and is not
+  done. - **`GATE_MIN_MACRO_F1_IMPROVEMENT = 0.02` is asserted, not derived.**
+  It should come from the measured run-to-run variance on a 240-document golden
+  set. I have not measured that variance, so the number is a plausible guess. -
+  **The golden set is synthetic and drawn from the same generator as training.**
   It is genuinely held out and non-overlap is asserted, but it is not an
   independent sample of the real world, so the absolute scores mean little. The
   *relative* comparison between versions is what the gate uses and that remains
@@ -776,54 +774,52 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
 
 - The `ci-deploy` `s3:ListBucket` condition allows both this environment's key
   prefix and `env:/*`, the latter because Terraform's S3 backend enumerates
-  workspaces during `init`. That reasoning is untested against a live backend.
-- The `aws:SourceArn` conditions on the SageMaker and Step Functions trust
+  workspaces during `init`. That reasoning is untested against a live backend. -
+  The `aws:SourceArn` conditions on the SageMaker and Step Functions trust
   policies are scoped to account + region with a wildcard suffix, because the
   resources they name don't exist yet. They should be narrowed to concrete ARNs
-  as M1–M3 create them.
-- `kms:RetireGrant` was added to the key-admin actions specifically because ECR
-  creates a grant on the key for the encrypted repository and deleting the repo
-  needs to retire it. Untested — and it is the most likely cause if `make
-  destroy` ever fails.
+  as M1–M3 create them. - `kms:RetireGrant` was added to the key-admin actions
+  specifically because ECR creates a grant on the key for the encrypted
+  repository and deleting the repo needs to retire it. Untested, and it is the
+  most likely cause if `make destroy` ever fails.
 
 **Found by an audit after M7, and fixed — worth naming because they were invisible
 to every test that existed**
 
-- **Nothing triggered the pipeline.** No `aws_s3_bucket_notification { eventbridge =
-  true }` existed, so S3 would never have published `Object Created`. Apply succeeded,
-  the rule matched an event that was never delivered, and no document would ever have
-  been processed.
-- **Six of eleven alarms could never have fired.** Metrics were emitted with
-  `[Environment, DocumentClass]` while every alarm queried `[Environment]`. CloudWatch
-  treats the dimension set as part of a metric's identity and does not roll up, so
-  those alarms would have sat in `INSUFFICIENT_DATA` permanently — and two tests
-  passed throughout because they compared metric *names* only.
-- **Human review was capped at 24 hours, not 7 days.** The execution timeout was
-  shorter than the review state's, and a `States.Timeout` raised by the execution
-  limit is not catchable — so the dead-letter path was unreachable and a document
-  parked over a weekend was lost silently.
-- **The canary could never have run.** Static resource names plus
-  `create_before_destroy` meant every endpoint *update*, which is the only path
-  a canary takes, failed with "cannot create already existing". - **The
-  dead-letter alarm notified nobody**, `make destroy` failed on a clean clone,
-  and the Model Package Group was created outside Terraform so it survived
-  teardown.
+- **Nothing triggered the pipeline.** No `aws_s3_bucket_notification {
+  eventbridge = true }` existed, so S3 would never have published `Object
+  Created`. Apply succeeded, the rule matched an event that was never delivered,
+  and no document would ever have been processed. - **Six of eleven alarms could
+  never have fired.** Metrics were emitted with `[Environment, DocumentClass]`
+  while every alarm queried `[Environment]`. CloudWatch treats the dimension set
+  as part of a metric's identity and does not roll up, so those alarms would
+  have sat in `INSUFFICIENT_DATA` permanently, and two tests passed throughout
+  because they compared metric *names* only. - **Human review was capped at 24
+  hours, not 7 days.** The execution timeout was shorter than the review
+  state's, and a `States.Timeout` raised by the execution limit is not
+  catchable, so the dead-letter path was unreachable and a document parked over
+  a weekend was lost silently. - **The canary could never have run.** Static
+  resource names plus `create_before_destroy` meant every endpoint *update*,
+  which is the only path a canary takes, failed with "cannot create already
+  existing". - **The dead-letter alarm notified nobody**, `make destroy` failed
+  on a clean clone, and the Model Package Group was created outside Terraform so
+  it survived teardown.
 
 Each now has a test. The dimension mismatch is in the regression-proof harness, so it
 is verified to fail on the real defect rather than merely asserted.
 
 **Still genuinely absent**
 
-- Audit sampling of confidently auto-approved documents — the single highest-value
-  addition, and the fix for both the Q2 blind spot and the retraining bias.
-- An X-Ray annotation on `correlation_id`, without which the runbook's
-  trace-by-document query returns nothing.
-- **Review-queue ageing is unmonitored.** Tasks expire at 7 days and then
-  dead-letter, so an undrained queue is data loss on a deadline — but the right
-  metric (age of the oldest pending review) needs a scheduled scan that does not
-  exist. Two wrong alarms were written before this was admitted: one measuring
-  arithmetic that evaluated to the auto-approved count, one reading a metric with no
-  publisher. A documented gap beats an alarm that cannot fire.
+- Audit sampling of confidently auto-approved documents — the single
+  highest-value addition, and the fix for both the Q2 blind spot and the
+  retraining bias. - An X-Ray annotation on `correlation_id`, without which the
+  runbook's trace-by-document query returns nothing. - **Review-queue ageing is
+  unmonitored.** Tasks expire at 7 days and then dead-letter, so an undrained
+  queue is data loss on a deadline, but the right metric (age of the oldest
+  pending review) needs a scheduled scan that does not exist. Two wrong alarms
+  were written before this was admitted: one measuring arithmetic that evaluated
+  to the auto-approved count, one reading a metric with no publisher. A
+  documented gap beats an alarm that cannot fire.
 
 ---
 

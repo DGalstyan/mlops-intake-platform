@@ -110,8 +110,8 @@ succeeds on any clean account without a human picking a unique suffix by hand.
 That is the M0 deliverable's "no manual step" bar.
 
 **I'd flip this if:** this project needed cosmetically clean bucket names for
-some customer-facing reason (e.g. a public data-sharing URL) — not the case
-here, all four buckets are fully private (`public_access_block` all true).
+some customer-facing reason (e.g. a public data-sharing URL), not the case here,
+all four buckets are fully private (`public_access_block` all true).
 
 ## CI deploy role: grow its permissions per-milestone, don't front-load them
 
@@ -196,8 +196,8 @@ working key policy to satisfy a text search trades real correctness risk for a
 cosmetic win.
 
 **Run `make wildcard-audit`** to regenerate the file:line list. Deliberately a
-command rather than a number written down, because a hardcoded count is a claim that
-rots — which is exactly what happened to the previous version of this entry.
+command rather than a number written down, because a hardcoded count is a claim
+that rots, which is exactly what happened to the previous version of this entry.
 
 **I'd flip this if:** an organisation-level SCP or a compliance scanner hard-failed on
 the literal string regardless of policy type. Then option (a) for KMS, and the
@@ -235,13 +235,12 @@ lifecycle block on anything.
 resources, `force_destroy = false` so a non-empty bucket blocks its own
 deletion.
 
-**Because:** this is a take-home graded explicitly on "`destroy` actually
-leaves nothing behind", with a ~$15 budget. A versioned bucket holding objects
-refuses to delete without `force_destroy`, and an ECR repo holding images
-refuses without `force_delete` — so the safe-looking defaults are precisely
-what would leave a dirty account and a failed teardown. The data here is
-synthetic and regenerable by `src/data/generate.py`, so there is nothing to
-protect.
+**Because:** this is a take-home graded explicitly on "`destroy` actually leaves
+nothing behind", with a ~$15 budget. A versioned bucket holding objects refuses
+to delete without `force_destroy`, and an ECR repo holding images refuses
+without `force_delete`, so the safe-looking defaults are precisely what would
+leave a dirty account and a failed teardown. The data here is synthetic and
+regenerable by `src/data/generate.py`, so there is nothing to protect.
 
 **I'd flip this if:** any of these buckets held real customer documents — then
 `prevent_destroy` on `processed`/`artifacts`, `force_destroy = false`
@@ -342,9 +341,9 @@ does carry it; the untaggable sub-resources
 (`aws_s3_bucket_versioning`, `aws_kms_alias`, `aws_s3_bucket_public_access_block`)
 accept no tags at all, from either mechanism.
 
-**I'd flip this if:** the tag were genuinely uniform per root — which is the
-case in `infra/bootstrap`, and that root does put `component = state-backend`
-in `default_tags`.
+**I'd flip this if:** the tag were genuinely uniform per root, which is the case
+in `infra/bootstrap`, and that root does put `component = state-backend` in
+`default_tags`.
 
 ---
 
@@ -421,7 +420,7 @@ only.
 **Because:** the intake Route state gates auto-approval on `max(predict_proba)`.
 Raw probabilities from a high-dimensional sparse TF-IDF fit are systematically
 overconfident, so an uncalibrated model auto-approves documents it should have
-escalated — and that failure surfaces as a *routing* bug, or as a rising human
+escalated, and that failure surfaces as a *routing* bug, or as a rising human
 override rate, long before anyone suspects the model's probability scale. If a
 confidence threshold is load-bearing, its calibration is a correctness property,
 not a tuning detail.
@@ -460,7 +459,7 @@ distinguishing them.
 **Because:** training-set numbers are genuinely useful for "did this fit
 converge", so throwing them away loses debugging signal. But an unlabelled
 training-set macro-F1 sitting in a file called `metrics.json` is the easiest way
-to accidentally publish a fictional score — and the retrain gate reads exactly
+to accidentally publish a fictional score, and the retrain gate reads exactly
 that field to decide whether a candidate beats the champion, so the consequence
 is a gate that silently stops meaning anything. The refusal in `register.py` is
 what makes the labelling load-bearing rather than advisory.
@@ -475,7 +474,7 @@ recorded in `snapshot.json` and carried into the registry as
 
 **Because:** the id has to *prove* two runs used the same input, and a UUID only
 records that someone generated data twice. With a content hash, an identical id
-means identical bytes and a changed document changes the id — which is what makes
+means identical bytes and a changed document changes the id, which is what makes
 it a usable lineage key when someone asks "was this model trained on the data we
 think it was?". The generation parameters are hashed in too, so two corpora that
 coincidentally contain the same documents under different splits do not collide.
@@ -517,9 +516,9 @@ releases. Pinning states the intent; recording what actually resolved is what a
 reproduction attempt needs, because those two can differ and only the second is
 evidence.
 
-**I'd flip this if:** install time on cold container starts became the bottleneck,
-at which point the pins move into a custom image built in CI and referenced by
-digest — which is what M2 does for inference anyway.
+**I'd flip this if:** install time on cold container starts became the
+bottleneck, at which point the pins move into a custom image built in CI and
+referenced by digest, which is what M2 does for inference anyway.
 
 ---
 
@@ -590,9 +589,9 @@ latency alarm: I guessed 2000 ms before measuring a p99 of 220 ms, and settled o
 and `evidence/m2/throughput.md`.
 
 **I'd flip this if:** a real concurrent load test against a deployed endpoint
-disagreed — which it may well, since the measurement is sequential, in-process, and
-on faster hardware than a t3.medium. It is an upper bound on capacity, and the
-derating factor is the guess that remains.
+disagreed, which it may well, since the measurement is sequential, in-process,
+and on faster hardware than a t3.medium. It is an upper bound on capacity, and
+the derating factor is the guess that remains.
 
 ## Malformed input returns 4xx, and that is a release-safety decision
 
@@ -602,13 +601,13 @@ oversized payload, empty document) to **4xx**, and only genuine internal failure
 
 **Over:** the simpler "any exception is a 500".
 
-**Because:** the endpoint's `ModelInvocation5XXErrors` alarm drives the automatic
-rollback. If a malformed request produced a 5xx, anyone posting bad JSON at a
-deployment could roll back a perfectly healthy version — and worse, the rollback
-would look justified in the alarm history. The status-code mapping is therefore not
-an HTTP-hygiene preference; it decides whether the rollback guardrail is
-trustworthy. There is a test asserting it, and the container smoke script checks it
-again against the running image.
+**Because:** the endpoint's `ModelInvocation5XXErrors` alarm drives the
+automatic rollback. If a malformed request produced a 5xx, anyone posting bad
+JSON at a deployment could roll back a perfectly healthy version, and worse, the
+rollback would look justified in the alarm history. The status-code mapping is
+therefore not an HTTP-hygiene preference; it decides whether the rollback
+guardrail is trustworthy. There is a test asserting it, and the container smoke
+script checks it again against the running image.
 
 **I'd flip this if:** never, for this design. If the alarm moved to a metric that
 excluded client errors, the mapping would still be right for every other reason.
@@ -622,13 +621,13 @@ than crashing the container.
 **Over:** returning 200 as soon as the process is up, or as soon as the artifact
 deserialises.
 
-**Because:** during a canary deployment, a container that reports ready before it
-can actually serve receives traffic, fails every request — and that failure is
-attributed to the *new* variant looking healthy long enough to proceed. An artifact
-can deserialise and still fail every call (version-mismatched pickle, empty
-vectoriser vocabulary), so a load-only check is the dangerous variant. Readiness
-that does not exercise the model is worse than no readiness check, because it is
-trusted.
+**Because:** during a canary deployment, a container that reports ready before
+it can actually serve receives traffic, fails every request, and that failure is
+attributed to the *new* variant looking healthy long enough to proceed. An
+artifact can deserialise and still fail every call (version-mismatched pickle,
+empty vectoriser vocabulary), so a load-only check is the dangerous variant.
+Readiness that does not exercise the model is worse than no readiness check,
+because it is trusted.
 
 Capturing the failure instead of exiting is deliberate too: a container that exits
 at startup gives SageMaker nothing to query and produces a generic "container
@@ -716,17 +715,17 @@ a cold start, a log group, an IAM role, a deployment artifact and a place for th
 retry policy to be subtly different. Two things fell out of removing them that I did
 not expect:
 
-- **Routing needed no Lambda at all.** Confidence and business-rule routing are two
-  Choice states. The endpoint returns its own `auto_approve_eligible` boolean,
-  computed against the config threshold, so the ASL compares a boolean rather than
-  duplicating the number — and there is a test asserting the ASL contains no
-  hardcoded threshold.
-- **The extraction prompt needed no Lambda either.** Prompts are rendered from
-  `schemas/*.json` at deploy time into DynamoDB and read with a direct GetItem. So
-  adding a field, or a whole document class, touches one JSON file and nothing else.
+- **Routing needed no Lambda at all.** Confidence and business-rule routing are
+  two Choice states. The endpoint returns its own `auto_approve_eligible`
+  boolean, computed against the config threshold, so the ASL compares a boolean
+  rather than duplicating the number, and there is a test asserting the ASL
+  contains no hardcoded threshold. - **The extraction prompt needed no Lambda
+  either.** Prompts are rendered from `schemas/*.json` at deploy time into
+  DynamoDB and read with a direct GetItem. So adding a field, or a whole
+  document class, touches one JSON file and nothing else.
 
-**I'd flip this if:** a step needed genuine branching logic over a payload — at which
-point a Lambda is honest and a 12-state ASL detour is not.
+**I'd flip this if:** a step needed genuine branching logic over a payload, at
+which point a Lambda is honest and a 12-state ASL detour is not.
 
 ## Idempotency is claimed before anything billable, and guards three writes
 
@@ -738,13 +737,13 @@ derived from the same key.
 **Over:** (a) checking for an existing result at the end; (b) relying on the
 execution-name dedupe alone.
 
-**Because:** each layer catches what the others miss. The execution name stops most
-duplicates before an execution starts, but only within its dedupe window. The ledger
-claim catches the rest — and because it runs first, a duplicate costs one DynamoDB
-write instead of a Textract call plus an endpoint invocation plus a Bedrock call.
-The conditional write on the *review task* is the one that is easy to forget and is
-called out explicitly in the assignment: two review tasks for one document wastes a
-human's time and produces two conflicting corrections.
+**Because:** each layer catches what the others miss. The execution name stops
+most duplicates before an execution starts, but only within its dedupe window.
+The ledger claim catches the rest, and because it runs first, a duplicate costs
+one DynamoDB write instead of a Textract call plus an endpoint invocation plus a
+Bedrock call. The conditional write on the *review task* is the one that is easy
+to forget and is called out explicitly in the assignment: two review tasks for
+one document wastes a human's time and produces two conflicting corrections.
 
 A duplicate ends in a `Succeed`, not a `Fail`. Duplicate S3 deliveries are routine,
 and failing them would put a permanent error rate on the state machine's metrics and
@@ -789,9 +788,9 @@ away work that was already paid for, and it is the difference between "Bedrock w
 throttled for ten minutes" and "we lost the document". The same reasoning makes an
 unparseable model response a *validation failure* rather than a Lambda error.
 
-**I'd flip this if:** review capacity were the binding constraint, where flooding the
-queue during a Bedrock outage would be worse than deferring the documents — at which
-point the right answer is a retry queue, not a dead letter.
+**I'd flip this if:** review capacity were the binding constraint, where
+flooding the queue during a Bedrock outage would be worse than deferring the
+documents, at which point the right answer is a retry queue, not a dead letter.
 
 ## The review API never accepts a task token from the caller
 
@@ -811,9 +810,9 @@ Related: `prediction_was_correct` is computed by comparing the correction to the
 stored prediction, never submitted. M5 uses the override rate as its concept-drift
 proxy, and a self-reported number would make that signal meaningless.
 
-**I'd flip this if:** the reviewer UI were a trusted server-side component holding
-its own credentials — but it would still be the wrong shape, because looking the
-token up costs one GetItem and removes the whole class of problem.
+**I'd flip this if:** the reviewer UI were a trusted server-side component
+holding its own credentials, but it would still be the wrong shape, because
+looking the token up costs one GetItem and removes the whole class of problem.
 
 ## The correction is persisted before the result
 
@@ -843,7 +842,7 @@ document is then auto-approved. Failing loudly means the failure surfaces in CI 
 someone adds a `$ref`, not in production as an unexplained auto-approval.
 
 **I'd flip this if:** the schemas needed `$ref`, `allOf`/`oneOf`, or conditional
-subschemas — at which point this should be *replaced* by the real library, not
+subschemas, at which point this should be *replaced* by the real library, not
 extended.
 
 ## The traces are from a simulation, and the tests are what make them credible
@@ -884,13 +883,14 @@ publishing them as values.
 
 **Because:** two things break with pre-computed values.
 
-1. A rate is frozen at the aggregation period it was computed for. With counters, the
-   dashboard shows a 15-minute rate and an alarm evaluates an hourly one over the same
-   datapoints. With a pre-averaged rate, one of those is wrong.
-2. The assignment requires `EstimatedCostPerDocument` to be computed from *real token
-   counts × documented prices*. Emitting a computed cost bakes today's price list into
-   stored datapoints, so when prices change, last week's cost becomes unrecomputable —
-   and worse, the historical series silently mixes two price regimes.
+1. A rate is frozen at the aggregation period it was computed for. With
+   counters, the dashboard shows a 15-minute rate and an alarm evaluates an
+   hourly one over the same datapoints. With a pre-averaged rate, one of those
+   is wrong. 2. The assignment requires `EstimatedCostPerDocument` to be
+   computed from *real token counts × documented prices*. Emitting a computed
+   cost bakes today's price list into stored datapoints, so when prices change,
+   last week's cost becomes unrecomputable, and worse, the historical series
+   silently mixes two price regimes.
 
 It also happened to solve an ASL limitation: ASL cannot convert a boolean to a number,
 so `AutoApproved = 1 or 0` was not expressible. Emitting a constant `1` from the
@@ -944,10 +944,11 @@ fresh render.
 **Over:** (a) hand-writing the inventory; (b) generating it from `terraform output`
 after an apply.
 
-**Because:** (a) drifts the moment someone adds an alarm — and an inventory that
-silently omits a new alarm is worse than one that is obviously out of date. (b) only
-exists after an apply, so it could not be produced at all without credentials, and it
-would describe whatever was last applied rather than what is in the repo.
+**Because:** (a) drifts the moment someone adds an alarm, and an inventory that
+silently omits a new alarm is worse than one that is obviously out of date. (b)
+only exists after an apply, so it could not be produced at all without
+credentials, and it would describe whatever was last applied rather than what is
+in the repo.
 
 The test is the part that matters. Without it this is just a script nobody runs.
 
@@ -1051,11 +1052,12 @@ training split. The artifact records `confidence_source` so a reader can tell wh
 **Over:** computing everything on the training split. M1 originally did, and it
 looks like the consistent choice.
 
-**Because:** a model is systematically more confident on documents it memorised. On
-this corpus the gap is p10 **0.865 on train vs 0.731 held out** — so comparing
+**Because:** a model is systematically more confident on documents it memorised.
+On this corpus the gap is p10 **0.865 on train vs 0.731 held out**, so comparing
 production against the training figure reports a 15% "decay" that is really
-memorisation, and that is enough to breach the decay threshold on an unshifted window.
-The drift job would have alarmed on day one, forever, on a perfectly healthy model.
+memorisation, and that is enough to breach the decay threshold on an unshifted
+window. The drift job would have alarmed on day one, forever, on a perfectly
+healthy model.
 
 The asymmetry is deliberate rather than an inconsistency: the input distributions
 answer "what does normal input look like to this model", and the data it was fitted to
@@ -1066,9 +1068,10 @@ model on data it has not seen", and training data cannot answer that at all.
 statistic that depends on model *behaviour* must come from held-out data, while
 statistics about the *inputs* may come from training data — is worth stating as a rule.
 
-**Cost:** `BASELINE_SCHEMA_VERSION` moved to 1.1.0. Same shape, so a 1.0.x reader still
-works, but its confidence comparison is against an inflated reference — which is why
-`confidence_source` is recorded rather than the change being silent.
+**Cost:** `BASELINE_SCHEMA_VERSION` moved to 1.1.0. Same shape, so a 1.0.x
+reader still works, but its confidence comparison is against an inflated
+reference, which is why `confidence_source` is recorded rather than the change
+being silent.
 
 ## Prediction drift alone never counts as decay
 
@@ -1138,12 +1141,12 @@ failure ends in `Fail`.
 
 **Over:** failing the execution when the candidate does not pass.
 
-**Because:** the gate working correctly is the system functioning as designed. Marking
-it as a failed execution would put a permanent error rate on the retrain state machine,
-and a metric that is always red is a metric nobody reads — so the one time the
-*pipeline* actually breaks, nobody notices. The two outcomes also need different
-notifications: "the model did not improve" and "the training job crashed" call for
-different people doing different things.
+**Because:** the gate working correctly is the system functioning as designed.
+Marking it as a failed execution would put a permanent error rate on the retrain
+state machine, and a metric that is always red is a metric nobody reads, so the
+one time the *pipeline* actually breaks, nobody notices. The two outcomes also
+need different notifications: "the model did not improve" and "the training job
+crashed" call for different people doing different things.
 
 ## The gate logic lives in one place, and the ASL reads its verdict
 
@@ -1152,11 +1155,12 @@ different people doing different things.
 
 **Over:** expressing the margin and per-class floor comparisons as ASL Choice rules.
 
-**Because:** re-implementing the comparison in ASL creates two definitions of "better"
-that can drift apart — and the one blocking releases would be the ASL copy, which has
-no unit tests. It also keeps the gate testable: `TestRetrainGate` in
-`tests/test_model_and_pipeline.py` exercises the collapsed-class case directly, which
-would be impractical against a deployed state machine.
+**Because:** re-implementing the comparison in ASL creates two definitions of
+"better" that can drift apart, and the one blocking releases would be the ASL
+copy, which has no unit tests. It also keeps the gate testable:
+`TestRetrainGate` in `tests/test_model_and_pipeline.py` exercises the
+collapsed-class case directly, which would be impractical against a deployed
+state machine.
 
 The same reasoning makes the retrain evaluation reuse `src.training.evaluate` as its
 container entrypoint rather than a separate evaluation script. A gate comparing numbers
@@ -1201,9 +1205,9 @@ echo, the 4xx-not-5xx mapping, and 503-with-no-model.
 `ENTRYPOINT ["gunicorn"]` with the arguments in CMD looks correct; but a command
 passed to `docker run` *replaces* CMD, so SageMaker's `serve` argument became
 gunicorn's module name. The container ran `gunicorn serve`, the worker died with
-`ModuleNotFoundError`, and the image built perfectly. That was an M2 bug that would
-have survived to a live endpoint — and the Dockerfile carried a comment claiming the
-case was handled.
+`ModuleNotFoundError`, and the image built perfectly. That was an M2 bug that
+would have survived to a live endpoint, and the Dockerfile carried a comment
+claiming the case was handled.
 
 **The general lesson:** "it builds" and "it runs the way the platform starts it" are
 different claims, and only the second one matters.
@@ -1216,9 +1220,9 @@ again. It runs in CI.
 
 **Over:** nominating a test in the README and trusting that it works.
 
-**Because:** a test that has only ever been observed passing is an assertion about
-nothing. It might be tautological, asserting on the wrong object, or silently
-skipped — and all three were true here on the first run:
+**Because:** a test that has only ever been observed passing is an assertion
+about nothing. It might be tautological, asserting on the wrong object, or
+silently skipped, and all three were true here on the first run:
 
 - a test that skipped whenever a generated artifact was absent, which is always in CI,
 - an assertion that checked a condition expression *contained* `attribute_not_exists`
@@ -1265,8 +1269,9 @@ branch, the PR, and any later cleanup of the repo. The rubric names account ids 
 repo as an instant point-loser, and a bot posting them into a comment is the same
 leak by a different route.
 
-**I'd flip this if:** the repo were private and the plan were needed verbatim for
-review — but even then, truncation is worth keeping, because a 60k comment is not read.
+**I'd flip this if:** the repo were private and the plan were needed verbatim
+for review, but even then, truncation is worth keeping, because a 60k comment is
+not read.
 
 ---
 
@@ -1340,8 +1345,8 @@ EventBridge rule on `SageMaker Model Package State Change` with
 `ModelApprovalStatus = Approved`.
 
 **Over:** one state machine that trains, registers, and then parks on a
-`.waitForTaskToken` state until someone approves — which is how the intake workflow
-already handles human review, so the pattern was sitting right there.
+`.waitForTaskToken` state until someone approves, which is how the intake
+workflow already handles human review, so the pattern was sitting right there.
 
 **Because:** the assignment's hard line is that retraining must never auto-deploy, and
 the two designs make very different promises about that. With a wait state, the code
