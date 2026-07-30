@@ -64,7 +64,11 @@ GATE_MIN_PER_CLASS_F1: Final[float] = 0.60
 # These are contracts between milestones. Bump when the shape changes, and the
 # consumer should refuse to read a version it does not know.
 METRICS_SCHEMA_VERSION: Final[str] = "1.0.0"
-BASELINE_SCHEMA_VERSION: Final[str] = "1.0.0"
+# 1.1.0: the confidence reference moved from the training split to the held-out
+# golden set, and `confidence_source` records which was used. Same shape, so a
+# 1.0.x reader still works — but its confidence comparison is against an
+# inflated reference and will report decay that is really memorisation.
+BASELINE_SCHEMA_VERSION: Final[str] = "1.1.0"
 
 # --- Filenames written into the artifact tarball / output paths ------------
 MODEL_FILENAME: Final[str] = "model.joblib"

@@ -28,7 +28,7 @@ and tested locally; M4–M6 are not started.
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
 | **M4** Observability | **Code + Terraform complete, never deployed** | 9 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
-| M5 Drift + Retraining | Not started | — |
+| **M5** Drift + Retraining | **Drift detection working with real evidence; retrain SM written, never run; no Terraform** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Retrain state machine with the gate and no deploy path. |
 | M6 CI/CD | Not started | `.github/workflows/` is empty |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
@@ -120,7 +120,7 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 261 tests, mypy-strict clean
+make test            # 330 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
@@ -262,6 +262,114 @@ git SHA, the training image digest, and the resolved dependency versions. Missin
 values are recorded as the explicit string `unknown` rather than defaulted,
 because only an explicit unknown is detectable in review. Locally the image digest
 is legitimately unknown and training prints a warning saying so.
+
+## Drift, retraining, and the sampling bias
+
+### Separating "the data changed" from "the model got worse"
+
+Three signal families, kept deliberately separate, because **the correct response
+differs and one of the responses is actively harmful applied to the other**:
+
+| Family | Answers | Needs the model? |
+|---|---|---|
+| **Input** — PSI + median shift on document length and token count | has the incoming data changed? | no — works when the endpoint is down |
+| **Prediction** — categorical PSI on the predicted-class mix | has the output mix changed? | endpoint output only |
+| **Concept** — override-rate trend, confidence p10 decay | has the *relationship* changed? | yes, plus human feedback |
+
+Four verdicts, and only two of them retrain:
+
+- `NO_DRIFT` → no action.
+- `DATA_CHANGED` → **do not retrain.** Inputs moved, the model is coping.
+- `MODEL_DECAYED` → retrain candidate. Inputs steady, the model is getting the
+  reviewed slice wrong more often. Invisible to input-drift tests.
+- `DATA_CHANGED_AND_MODEL_DECAYED` → retrain, highest priority.
+
+**Why conflating them is a bug:** retraining in response to input drift alone spends
+money fitting the new distribution's noise, and it does so using labels sourced from
+human review — which only covers the low-confidence slice. You can make the model
+*worse* by responding to a signal that did not require a response. A single combined
+"drift score" maps these opposite situations onto the same number and prescribes the
+same action for both.
+
+`evidence/m5/` demonstrates this with real numbers: the deliberately shifted batch
+produces PSI **19.8** on document length — roughly 79× the significant-shift
+threshold — while the class mix is unchanged (0.0001) and confidence *rises* 35%. The
+verdict is `DATA_CHANGED` and the retrain trigger stays off.
+
+### The retrain gate, and why a human is in it
+
+`train → evaluate → gate → register(PendingManualApproval) → notify`. The state
+machine **never deploys**. It stops at registration; a human approving that registry
+version is what emits the EventBridge event that starts the M2 canary deploy. There
+is a test asserting no endpoint API appears anywhere in the definition, and another
+asserting the approval status is hardcoded rather than taken from input — if it were
+an input, a caller could pass `Approved` and self-deploy.
+
+The gate is two independent conditions, both computed by the *same* `evaluate.py`
+that produced the champion's numbers:
+
+1. macro-F1 must beat the champion by ≥ `GATE_MIN_MACRO_F1_IMPROVEMENT` (0.02). A
+   margin, not `>`, because on a 240-document golden set the difference between two
+   runs is often noise, and a gate that fires on noise gets ignored.
+2. no single class may fall below `GATE_MIN_PER_CLASS_F1` (0.60). An overall gain can
+   hide one collapsed class — a model that improved on average while becoming useless
+   for `id_document` must not ship.
+
+**Why a human, and when I would remove them.** The gate proves a candidate is better
+*on the golden set*. It cannot prove the candidate is better on the traffic that has
+been arriving since the golden set was frozen, and it cannot see the sampling bias
+below. I would remove the human when there is (a) an audited random sample of
+production documents to evaluate against, not just a frozen synthetic set, and (b)
+enough deploy history that the canary + auto-rollback has demonstrably caught a bad
+version. Until both hold, the human is the only thing standing between "the numbers
+improved" and "it is serving traffic".
+
+### The sampling bias — the trap, stated plainly
+
+**The retraining data comes from human review. Human review only sees
+low-confidence and always-review documents. Therefore the labelled data is a biased
+sample of exactly the documents the model already finds hard.**
+
+Three consequences, and the third is the one that matters:
+
+1. **The labelled set over-represents ambiguity.** Train naively on it and the model
+   optimises for the hard slice at the expense of the easy majority it was already
+   getting right.
+2. **Confidently-wrong documents never enter the loop.** They auto-approve, so nobody
+   reviews them, so they are never corrected, so they are never in the training data.
+   The model's *specific* blind spot is the one region the feedback loop structurally
+   cannot reach.
+3. **It compounds.** After three retrain cycles: cycle 1 shifts the decision boundary
+   toward the hard slice; more documents fall below the confidence threshold and are
+   reviewed, so cycle 2's training data is *more* biased than cycle 1's; the model
+   becomes progressively better at ambiguous documents and progressively more
+   confident about a shrinking region it never gets corrected on. **The override rate
+   can fall the whole time**, because the documents being reviewed are the ones the
+   model now handles well — so the primary quality proxy improves while real accuracy
+   degrades. That is the failure mode, and no metric currently in this platform would
+   catch it.
+
+**What I would do about it,** in the order I would do it:
+
+1. **Audit sampling — the fix that matters.** Route a small random percentage of
+   *confidently auto-approved* documents to human review anyway. This is the only
+   mechanism that puts confidently-wrong documents into the feedback loop, and it
+   simultaneously gives an unbiased accuracy estimate. Cost is a fixed small tax on
+   review capacity. **Not implemented**, and it is the single highest-value addition
+   to this design.
+2. **Stratified sampling across confidence bins** when assembling training data, so
+   the retrain set's confidence distribution matches production rather than the review
+   queue's.
+3. **Importance weighting** to correct the selection probability, if the routing rule
+   is known — it is, since it is a threshold on a recorded confidence.
+4. **Keep an audited hold-out set entirely separate** from review-sourced data, and
+   evaluate on it. The golden set serves this role today, but it is synthetic and
+   frozen at M1, so it ages.
+
+The corrections table records `original_predicted_class`, `original_confidence` and
+`was_prediction_correct` on every row precisely so this bias is *measurable* — you can
+see the confidence distribution of the labelled set and compare it to production.
+Measuring it is not fixing it.
 
 ## Observability: what actually measures model quality
 
@@ -470,6 +578,29 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M5 specifically**
+
+- **No full retrain → gate → approve → canary cycle.** Half of M5's deliverable. The
+  retrain state machine is written and its safety properties are tested — registration
+  is always `PendingManualApproval`, and no endpoint API appears anywhere in the
+  definition — but it has **never executed**.
+- **No M5 Terraform.** The drift Lambda, its EventBridge schedule, the retrain state
+  machine and the EventBridge rule on registry approval are **not written**. The drift
+  code runs only via the CLI.
+- **The drift reports are real, but the input is not production data.** The math runs
+  against the actual M1 baseline and actual generated batches — no stubs — but the
+  windows are locally-scored documents, not SageMaker data capture.
+  `parse_capture_record` handles the capture envelope and is tested, but has never
+  seen a real capture file.
+- **Audit sampling is not implemented.** Routing a random slice of confidently
+  auto-approved documents to review is the only mechanism that would put
+  confidently-wrong documents into the feedback loop. Its absence is the largest
+  substantive gap in the drift design, not just an unbuilt feature — see the
+  sampling-bias section.
+- **`ks_statistic` is tested but unused by the report.** It was removed from the input
+  family after it produced false positives against a histogram-reconstructed baseline.
+  It is kept for the case where both sides have real samples.
 
 **M4 specifically**
 

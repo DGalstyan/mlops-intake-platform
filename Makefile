@@ -14,7 +14,7 @@ endif
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
         measure-throughput docker-build docker-smoke resolve-approved smoke-test \
         simulate-intake prompts package-lambdas seed-prompts wildcard-audit \
-        alarm-inventory \
+        alarm-inventory drift drift-scenarios \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -248,3 +248,21 @@ wildcard-audit:
 # matches a fresh render, so adding an alarm without regenerating fails CI.
 alarm-inventory: venv
 	$(PY) scripts/render_alarm_inventory.py --output evidence/m4/alarm-inventory.md
+
+# --- M5 drift --------------------------------------------------------------
+# Generate the three drift scenarios that demonstrate the data-changed vs
+# model-decayed distinction. Real math against the real M1 baseline — no stubs.
+drift-scenarios: venv
+	$(PY) scripts/drift_scenarios.py \
+		--baseline $(ARTIFACTS_DIR)/v1/output/baseline_statistics.json \
+		--data-dir $(DATA_DIR) \
+		--model $(ARTIFACTS_DIR)/v1/model/model.joblib \
+		--output-dir evidence/m5
+
+# One-off drift run against an arbitrary window.
+drift: venv
+	$(PY) -m src.drift.detect \
+		--baseline $(ARTIFACTS_DIR)/v1/output/baseline_statistics.json \
+		--window $(DATA_DIR)/shifted.jsonl \
+		--classify-with $(ARTIFACTS_DIR)/v1/model/model.joblib \
+		--output-dir evidence/m5 --label "shifted batch"

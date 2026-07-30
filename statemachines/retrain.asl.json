@@ -1,0 +1,387 @@
+{
+  "Comment": "Retrain loop: train -> evaluate on the frozen golden set -> gate -> register PendingManualApproval -> notify. The state machine NEVER deploys. Registration is where it stops; a human approving that registry version is what emits the EventBridge event that triggers the M2 canary deploy. That separation is the whole point — an automated path from 'metrics improved' to 'serving production traffic' is the failure this design exists to prevent.",
+  "StartAt": "RecordTrigger",
+  "TimeoutSeconds": 21600,
+  "States": {
+    "RecordTrigger": {
+      "Comment": "Capture WHY this retrain started. A retrain triggered by a drift breach and one triggered by a human clicking the manual workflow have different evidentiary weight later, and 'why did version 7 exist' is the first question asked when a model misbehaves.",
+      "Type": "Pass",
+      "Parameters": {
+        "trigger": {
+          "source.$": "$.trigger_source",
+          "drift_report_uri.$": "$.drift_report_uri",
+          "verdict.$": "$.drift_verdict",
+          "started_at.$": "$$.Execution.StartTime",
+          "execution_arn.$": "$$.Execution.Id"
+        },
+        "champion_metrics_uri.$": "$.champion_metrics_uri",
+        "data_snapshot_uri.$": "$.data_snapshot_uri"
+      },
+      "Next": "Train"
+    },
+
+    "Train": {
+      "Comment": "SageMaker training job, run synchronously. Trains on the training split PLUS the human corrections accumulated since the last run — which is exactly the data whose sampling bias the README discusses at length: reviewers only ever see low-confidence documents.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sagemaker:createTrainingJob.sync",
+      "Parameters": {
+        "TrainingJobName.$": "States.Format('${TrainingJobPrefix}-{}', States.ArrayGetItem(States.StringSplit($$.Execution.Name, ':'), 0))",
+        "AlgorithmSpecification": {
+          "TrainingImage": "${TrainingImageUri}",
+          "TrainingInputMode": "File"
+        },
+        "RoleArn": "${TrainingRoleArn}",
+        "InputDataConfig": [
+          {
+            "ChannelName": "train",
+            "DataSource": {
+              "S3DataSource": {
+                "S3DataType": "S3Prefix",
+                "S3Uri.$": "$.data_snapshot_uri",
+                "S3DataDistributionType": "FullyReplicated"
+              }
+            }
+          }
+        ],
+        "OutputDataConfig": {
+          "S3OutputPath": "${ArtifactsS3Prefix}/retrain",
+          "KmsKeyId": "${KmsKeyArn}"
+        },
+        "ResourceConfig": {
+          "InstanceType": "${TrainingInstanceType}",
+          "InstanceCount": 1,
+          "VolumeSizeInGB": 10,
+          "VolumeKmsKeyId": "${KmsKeyArn}"
+        },
+        "StoppingCondition": {
+          "MaxRuntimeInSeconds": 3600
+        },
+        "Environment": {
+          "GIT_SHA": "${GitSha}"
+        }
+      },
+      "ResultPath": "$.training",
+      "Retry": [
+        {
+          "Comment": "ResourceLimitExceeded means the account is at its instance quota — a transient condition that clears as other jobs finish, so it is worth waiting minutes rather than failing the retrain.",
+          "ErrorEquals": ["SageMaker.ResourceLimitExceededException"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 600,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": ["SageMaker.SdkClientException", "States.Timeout", "States.TaskFailed"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "Evaluate"
+    },
+
+    "Evaluate": {
+      "Comment": "Processing job scoring the candidate on the FROZEN golden set, using the same evaluate.py that produced the champion's numbers. Deliberately not a separate evaluation path: a gate that compares numbers produced by two different code paths is comparing two different things. The job also asserts train/golden non-overlap and fails if the golden set has leaked.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sagemaker:createProcessingJob.sync",
+      "Parameters": {
+        "ProcessingJobName.$": "States.Format('${EvaluationJobPrefix}-{}', States.ArrayGetItem(States.StringSplit($$.Execution.Name, ':'), 0))",
+        "AppSpecification": {
+          "ImageUri": "${TrainingImageUri}",
+          "ContainerEntrypoint": ["python", "-m", "src.training.evaluate"],
+          "ContainerArguments": [
+            "--model-dir", "/opt/ml/processing/model",
+            "--data-dir", "/opt/ml/processing/data",
+            "--output-dir", "/opt/ml/processing/output",
+            "--champion-metrics", "/opt/ml/processing/champion/metrics.json"
+          ]
+        },
+        "RoleArn": "${TrainingRoleArn}",
+        "ProcessingResources": {
+          "ClusterConfig": {
+            "InstanceType": "${EvaluationInstanceType}",
+            "InstanceCount": 1,
+            "VolumeSizeInGB": 10,
+            "VolumeKmsKeyId": "${KmsKeyArn}"
+          }
+        },
+        "StoppingCondition": {
+          "MaxRuntimeInSeconds": 1800
+        },
+        "ProcessingInputs": [
+          {
+            "InputName": "model",
+            "S3Input": {
+              "S3Uri.$": "$.training.ModelArtifacts.S3ModelArtifacts",
+              "LocalPath": "/opt/ml/processing/model",
+              "S3DataType": "S3Prefix",
+              "S3InputMode": "File"
+            }
+          },
+          {
+            "InputName": "data",
+            "S3Input": {
+              "S3Uri.$": "$.data_snapshot_uri",
+              "LocalPath": "/opt/ml/processing/data",
+              "S3DataType": "S3Prefix",
+              "S3InputMode": "File"
+            }
+          },
+          {
+            "InputName": "champion",
+            "S3Input": {
+              "S3Uri.$": "$.champion_metrics_uri",
+              "LocalPath": "/opt/ml/processing/champion",
+              "S3DataType": "S3Prefix",
+              "S3InputMode": "File"
+            }
+          }
+        ],
+        "ProcessingOutputConfig": {
+          "KmsKeyId": "${KmsKeyArn}",
+          "Outputs": [
+            {
+              "OutputName": "evaluation",
+              "S3Output": {
+                "S3Uri": "${ArtifactsS3Prefix}/retrain-evaluation",
+                "LocalPath": "/opt/ml/processing/output",
+                "S3UploadMode": "EndOfJob"
+              }
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.evaluation",
+      "Retry": [
+        {
+          "ErrorEquals": ["SageMaker.ResourceLimitExceededException"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 600,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": ["SageMaker.SdkClientException", "States.Timeout", "States.TaskFailed"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ReadGateDecision"
+    },
+
+    "ReadGateDecision": {
+      "Comment": "Read the gate verdict computed by evaluate.py and written into metrics.json. The gate logic lives in ONE place — the same function M1 uses — rather than being re-expressed as Choice states here. Re-implementing the comparison in ASL would mean two definitions of 'better' that can drift apart, and the one that actually blocks a release would be the one nobody tested.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+      "Parameters": {
+        "Bucket": "${ArtifactsBucket}",
+        "Key.$": "States.Format('retrain-evaluation/{}/metrics.json', States.ArrayGetItem(States.StringSplit($$.Execution.Name, ':'), 0))"
+      },
+      "ResultSelector": {
+        "metrics.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.gate_input",
+      "Retry": [
+        {
+          "ErrorEquals": ["S3.NoSuchKey", "S3.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "Gate"
+    },
+
+    "Gate": {
+      "Comment": "THE GATE. Two independent conditions, both computed by evaluate.evaluate_gate: the candidate must beat the champion by GATE_MIN_MACRO_F1_IMPROVEMENT on the golden set, AND no single class may fall below GATE_MIN_PER_CLASS_F1. The margin exists so the gate does not fire on evaluation noise; the per-class floor exists because an overall gain can hide one collapsed class, and a model that improved on average while becoming useless for id_document must not ship.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gate_input.metrics.gate.passed",
+          "BooleanEquals": true,
+          "Next": "RegisterCandidate"
+        }
+      ],
+      "Default": "NotifyGateFailed"
+    },
+
+    "NotifyGateFailed": {
+      "Comment": "The candidate did not beat the champion. Terminal SUCCESS, not failure: the gate working is the system functioning correctly, and marking it as a failed execution would put a permanent error rate on the retrain state machine and train people to ignore it. The champion stays live.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Retrain candidate REJECTED by the gate",
+        "Message.$": "States.Format('A retrain candidate failed the promotion gate and was NOT registered. Reason: {}. Champion macro-F1: {}. Candidate macro-F1: {}. Trigger: {}. The current champion remains live; no action is required.', $.gate_input.metrics.gate.reason, $.gate_input.metrics.gate.champion_macro_f1, $.gate_input.metrics.gate.candidate_macro_f1, $.trigger.source)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "RejectedByGate",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "RejectedByGate"
+    },
+
+    "RejectedByGate": {
+      "Type": "Succeed",
+      "Comment": "Terminal success. The gate did its job."
+    },
+
+    "RegisterCandidate": {
+      "Comment": "Register the candidate as a new Model Package version with ModelApprovalStatus = PendingManualApproval. Hardcoded here, not parameterised: the approval status is the safety property this entire milestone rests on, and making it an input would let a caller pass 'Approved' and self-deploy.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sagemaker:createModelPackage",
+      "Parameters": {
+        "ModelPackageGroupName": "${ModelPackageGroupName}",
+        "ModelApprovalStatus": "PendingManualApproval",
+        "ModelPackageDescription.$": "States.Format('Retrain candidate. macro-F1 {} vs champion {}. Trigger: {} ({}).', $.gate_input.metrics.macro_f1, $.gate_input.metrics.gate.champion_macro_f1, $.trigger.source, $.trigger.verdict)",
+        "CustomerMetadataProperties": {
+          "trigger_source.$": "$.trigger.source",
+          "drift_report_uri.$": "$.trigger.drift_report_uri",
+          "drift_verdict.$": "$.trigger.verdict",
+          "retrain_execution_arn.$": "$.trigger.execution_arn",
+          "gate_passed": "true",
+          "metrics_split": "golden",
+          "data_snapshot_uri.$": "$.data_snapshot_uri"
+        },
+        "InferenceSpecification": {
+          "Containers": [
+            {
+              "Image": "${InferenceImageUri}",
+              "ModelDataUrl.$": "$.training.ModelArtifacts.S3ModelArtifacts"
+            }
+          ],
+          "SupportedContentTypes": ["application/json"],
+          "SupportedResponseMIMETypes": ["application/json"]
+        }
+      },
+      "ResultPath": "$.registration",
+      "Retry": [
+        {
+          "ErrorEquals": ["SageMaker.SdkClientException", "States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "NotifyAwaitingApproval"
+    },
+
+    "NotifyAwaitingApproval": {
+      "Comment": "Tell a human there is something to review. This is where the automated path ENDS. Nothing downstream of here runs until a person approves the registry version, and that approval — not this state machine — emits the EventBridge event that starts the canary deploy.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Retrain candidate AWAITING APPROVAL",
+        "Message.$": "States.Format('A retrain candidate passed the gate and is registered as PendingManualApproval.\n\nModel package: {}\nCandidate macro-F1: {}\nChampion macro-F1: {}\nTriggered by: {} ({})\nDrift report: {}\n\nIT IS NOT DEPLOYED. Approving this version in the SageMaker Model Registry is what triggers the canary deploy.\n\nBefore approving, read the sampling-bias section in the README: this candidate was trained partly on human corrections, which only cover documents a reviewer saw — the low-confidence slice. Check the per-class F1, not just the headline number.', $.registration.ModelPackageArn, $.gate_input.metrics.macro_f1, $.gate_input.metrics.gate.champion_macro_f1, $.trigger.source, $.trigger.verdict, $.trigger.drift_report_uri)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "The version is registered whether or not the notification lands, so a failed publish must not fail the execution — it would look like the retrain failed when a candidate is in fact waiting.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "AwaitingHumanApproval",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "AwaitingHumanApproval"
+    },
+
+    "AwaitingHumanApproval": {
+      "Type": "Succeed",
+      "Comment": "Terminal. The candidate is registered and waiting for a human. There is deliberately no .waitForTaskToken here: approval happens in the SageMaker Model Registry console, on its own timescale, and is observed via EventBridge. Holding an execution open for days waiting on a console click would couple the retrain's lifetime to a human's calendar for no benefit."
+    },
+
+    "NotifyFailure": {
+      "Comment": "Something in the retrain pipeline broke. Distinct from a gate rejection, which is not a failure — conflating the two would mean nobody could tell 'the model did not improve' from 'the training job crashed'.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Retrain pipeline FAILED",
+        "Message.$": "States.Format('The retrain state machine failed. This is a pipeline failure, NOT a rejected candidate — no model was evaluated. Execution: {}\nError: {}\nTrigger: {}', $$.Execution.Id, States.JsonToString($.error), $.trigger.source)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "RetrainFailed",
+          "ResultPath": "$.notify_error"
+        }
+      ],
+      "Next": "RetrainFailed"
+    },
+
+    "RetrainFailed": {
+      "Type": "Fail",
+      "Error": "RetrainPipelineFailed",
+      "Cause": "The retrain pipeline failed before a gate decision could be made. See the SNS notification and the execution history."
+    }
+  }
+}

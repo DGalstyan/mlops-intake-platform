@@ -1,0 +1,115 @@
+{
+  "baseline": {
+    "data_snapshot_id": "sha256:0aba339dd3d872afd4295cb32d150f5e37d3d173259530c28f57f0cc93a5500d",
+    "git_sha": "47ca587fdb66ba202be0166196d62b63e6f1d319",
+    "reference_set_size": 1360,
+    "schema_version": "1.1.0"
+  },
+  "generated_at": "2026-07-30T15:16:38+00:00",
+  "recommended_action": "No action. Inputs and model behaviour both look like the baseline.",
+  "schema_version": "1.0.0",
+  "should_trigger_retrain": false,
+  "signals": {
+    "concept": {
+      "breached": false,
+      "family": "concept",
+      "measures": [
+        {
+          "breached": false,
+          "detail": {
+            "actual_p10": 0.731149,
+            "baseline_p10": 0.731149
+          },
+          "interpretation": "p10 confidence moved +0.0% vs baseline (0.731 -> 0.731)",
+          "name": "confidence_p10_decay",
+          "statistic": 0.0,
+          "threshold": -0.1
+        },
+        {
+          "breached": false,
+          "interpretation": "12.5% of documents fell below the 0.8 auto-approve threshold",
+          "name": "share_below_auto_approve_threshold",
+          "statistic": 0.125,
+          "threshold": 0.3
+        },
+        {
+          "breached": false,
+          "interpretation": "override rate is 10.0% of 30 reviewed documents, but the baseline records no override-rate reference (it was built from training data, where nothing was reviewed). This becomes a usable signal once a production window has been captured as the new reference.",
+          "name": "override_rate_trend",
+          "statistic": 0.1,
+          "threshold": 0.5
+        }
+      ]
+    },
+    "input": {
+      "breached": false,
+      "family": "input",
+      "measures": [
+        {
+          "breached": false,
+          "interpretation": "stable",
+          "name": "psi_document_char_length",
+          "statistic": 0.009237,
+          "threshold": 0.25
+        },
+        {
+          "breached": false,
+          "detail": {
+            "actual_p50": 168.0,
+            "baseline_p50": 162.0
+          },
+          "interpretation": "document length (characters): median moved +3.7% (162 -> 168); documents got longer",
+          "name": "median_shift_document_char_length",
+          "statistic": 0.037037,
+          "threshold": 0.25
+        },
+        {
+          "breached": false,
+          "interpretation": "stable",
+          "name": "psi_document_token_count",
+          "statistic": 0.001901,
+          "threshold": 0.25
+        },
+        {
+          "breached": false,
+          "detail": {
+            "actual_p50": 20.0,
+            "baseline_p50": 20.0
+          },
+          "interpretation": "document length (tokens): median moved +0.0% (20 -> 20); documents got shorter",
+          "name": "median_shift_document_token_count",
+          "statistic": 0.0,
+          "threshold": 0.25
+        }
+      ]
+    },
+    "prediction": {
+      "breached": false,
+      "family": "prediction",
+      "measures": [
+        {
+          "breached": false,
+          "detail": {
+            "correspondence": 0.000503,
+            "id_document": 0.000163,
+            "invoice": 0.000163,
+            "medical_report": 9e-06
+          },
+          "interpretation": "class mix matches the baseline",
+          "name": "psi_predicted_class_mix",
+          "statistic": 0.000838,
+          "threshold": 0.25
+        }
+      ]
+    }
+  },
+  "verdict": "NO_DRIFT",
+  "why_the_distinction_matters": "Input drift and model decay require different responses, and one of them is actively harmful when applied to the other. Retraining in response to input drift alone spends money fitting the new distribution's noise, using labels sourced from human review \u2014 which only sees low-confidence documents and is therefore biased toward hard cases. A single combined 'drift score' would map these opposite situations onto the same number and prescribe the same action for both.",
+  "window": {
+    "documents": 240,
+    "label": "unshifted golden set (control)",
+    "overrides": 3,
+    "reviewed": 30,
+    "schema_failures": 0
+  }
+}

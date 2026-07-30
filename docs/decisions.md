@@ -1008,3 +1008,157 @@ thing on the page answers "is the platform doing its job?" and CPU appears nowhe
 all. The model-health section explicitly labels its metrics as *proxies* and names what
 each is blind to, on the dashboard itself rather than only in the README — the person
 reading it at 3am is not reading the README.
+
+---
+
+# Decision log — M5 (Drift detection & retraining)
+
+## PSI over binned data, not KS over a reconstructed sample
+
+**Chose:** input drift is PSI against the baseline's stored histogram edges, plus a
+directional median shift. `ks_statistic` exists and is tested, but the report does not
+use it for the baseline comparison.
+
+**Over:** the obvious answer, which is what I built first — reconstruct samples from
+the stored histogram and run a two-sample KS test.
+
+**Because:** KS compares empirical CDFs and therefore needs samples on both sides. The
+baseline deliberately stores a histogram rather than raw documents, so reconstructing
+samples to run KS measures the *reconstruction*. On an unshifted control window it
+reported 0.30 and 0.38 ("breached") where PSI on the identical data reported 0.009 and
+0.002 ("stable"). Spreading the reconstruction uniformly within bins instead of at
+midpoints roughly halved the error and still left a false positive on token counts,
+which are small integers no within-bin reconstruction recovers.
+
+A drift detector that fires on unchanged data is worse than no detector: it gets
+muted, and the real signal is muted with it.
+
+The median shift was added because PSI's `(a-b)·ln(a/b)` term is symmetric — it says
+*that* two distributions differ, never which way, and "documents got longer" and
+"documents got shorter" have different causes.
+
+**I'd flip this if:** the baseline stored raw samples or a quantile sketch (t-digest),
+at which point KS is exactly right and needs no reconstruction. That is the correct
+upgrade if input drift ever needs to detect within-bin shifts.
+
+**Found by:** running the detector against a control window. That test now exists.
+
+## The baseline's confidence reference is held-out, not training data
+
+**Chose:** the confidence histogram in `baseline_statistics.json` is computed on the
+**golden set**, while every other distribution in the same artifact comes from the
+training split. The artifact records `confidence_source` so a reader can tell which.
+
+**Over:** computing everything on the training split, which is what M1 originally did
+and is the consistent-looking choice.
+
+**Because:** a model is systematically more confident on documents it memorised. On
+this corpus the gap is p10 **0.865 on train vs 0.731 held out** — so comparing
+production against the training figure reports a 15% "decay" that is really
+memorisation, and that is enough to breach the decay threshold on an unshifted window.
+The drift job would have alarmed on day one, forever, on a perfectly healthy model.
+
+The asymmetry is deliberate rather than an inconsistency: the input distributions
+answer "what does normal input look like to this model", and the data it was fitted to
+is the right answer to that. The confidence reference answers "how certain is this
+model on data it has not seen", and training data cannot answer that at all.
+
+**I'd flip this if:** never for confidence. The general principle — any baseline
+statistic that depends on model *behaviour* must come from held-out data, while
+statistics about the *inputs* may come from training data — is worth stating as a rule.
+
+**Cost:** `BASELINE_SCHEMA_VERSION` moved to 1.1.0. Same shape, so a 1.0.x reader still
+works, but its confidence comparison is against an inflated reference — which is why
+`confidence_source` is recorded rather than the change being silent.
+
+## Prediction drift alone never counts as decay
+
+**Chose:** the classifier treats input drift and prediction drift together as "data
+changed", and only the concept proxies (override rate, confidence decay) as "model
+decayed". A shifted class mix on its own produces `DATA_CHANGED`.
+
+**Over:** treating a shifted prediction distribution as evidence of model degradation,
+which is how it is often used.
+
+**Because:** if the input mix changed, the prediction mix *should* follow — that is the
+model working, not failing. A customer who starts sending more invoices and fewer
+letters shifts the prediction distribution without anything being wrong. Treating that
+as decay would trigger a retrain every time a customer changed their paperwork mix,
+and each of those retrains would pull in more review-sourced, bias-selected labels.
+
+**I'd flip this if:** prediction drift were measured *conditional* on input segment —
+a class mix that shifts within an unchanged input distribution genuinely is a model
+signal. That needs input segmentation this does not have.
+
+## The drift job is a scheduled Lambda, not a Processing job
+
+**Chose:** a Lambda on an EventBridge schedule.
+
+**Over:** a SageMaker Processing job, which is what the milestone brief suggests first.
+
+**Because:** the computation is histogram arithmetic over a bounded window — a few
+hundred kilobytes of counts. A Processing job would spend more on container startup
+than on the work, and its only real advantage is arbitrary scale, which is not needed
+until a window exceeds Lambda's memory.
+
+**I'd flip this at a stated threshold:** when a single window no longer fits in Lambda
+memory, or when drift needs embedding-based distances (which means loading a model and
+GPU-adjacent compute). Both are real triggers rather than "when it feels big".
+
+## The retrain state machine stops at registration and has no deploy path
+
+**Chose:** `train → evaluate → gate → register(PendingManualApproval) → notify`, ending
+in a `Succeed`. Approval happens in the SageMaker console; an EventBridge rule on the
+approval event triggers the M2 canary deploy.
+
+**Over:** (a) continuing to a deploy state after the gate passes; (b) using
+`.waitForTaskToken` to hold the execution open until a human approves.
+
+**Because:** (a) is the named point-loser — "retraining that automatically deploys to
+production with no gate" — and a gate the same workflow can walk past is not a gate.
+The approval status is *hardcoded* rather than parameterised for the same reason: as an
+input, a caller could pass `Approved` and self-deploy. Two tests enforce this: one
+asserting no endpoint API appears anywhere in the definition, one asserting the status
+is not read from input.
+
+(b) was tempting because it keeps the whole flow in one execution, but it couples the
+retrain's lifetime to a human's calendar. Approval can legitimately take days; holding
+an execution open that long to observe a console click buys nothing that an
+EventBridge rule does not.
+
+**I'd flip the human gate itself when:** there is an audited random sample of
+production traffic to evaluate against (not just a frozen synthetic golden set) *and*
+the canary + auto-rollback has demonstrably caught a bad version in practice. Until
+both hold, the human is the only thing between "the numbers improved" and "serving
+traffic".
+
+## A rejected candidate is a successful execution
+
+**Chose:** the gate rejecting a candidate ends in `Succeed`, and only a pipeline
+failure ends in `Fail`.
+
+**Over:** failing the execution when the candidate does not pass.
+
+**Because:** the gate working correctly is the system functioning as designed. Marking
+it as a failed execution would put a permanent error rate on the retrain state machine,
+and a metric that is always red is a metric nobody reads — so the one time the
+*pipeline* actually breaks, nobody notices. The two outcomes also need different
+notifications: "the model did not improve" and "the training job crashed" call for
+different people doing different things.
+
+## The gate logic lives in one place, and the ASL reads its verdict
+
+**Chose:** `evaluate.evaluate_gate` computes the pass/fail decision, writes it into
+`metrics.json`, and the retrain state machine's Choice reads a single boolean.
+
+**Over:** expressing the margin and per-class floor comparisons as ASL Choice rules.
+
+**Because:** re-implementing the comparison in ASL creates two definitions of "better"
+that can drift apart — and the one blocking releases would be the ASL copy, which has
+no unit tests. It also keeps the gate testable: `TestRetrainGate` in
+`tests/test_model_and_pipeline.py` exercises the collapsed-class case directly, which
+would be impractical against a deployed state machine.
+
+The same reasoning makes the retrain evaluation reuse `src.training.evaluate` as its
+container entrypoint rather than a separate evaluation script. A gate comparing numbers
+produced by two different code paths is comparing two different things.

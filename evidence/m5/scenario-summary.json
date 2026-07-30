@@ -1,0 +1,26 @@
+[
+  {
+    "scenario": "control",
+    "verdict": "NO_DRIFT",
+    "input": false,
+    "prediction": false,
+    "concept": false,
+    "retrain": false
+  },
+  {
+    "scenario": "data-changed",
+    "verdict": "DATA_CHANGED",
+    "input": true,
+    "prediction": false,
+    "concept": false,
+    "retrain": false
+  },
+  {
+    "scenario": "model-decayed",
+    "verdict": "MODEL_DECAYED",
+    "input": false,
+    "prediction": false,
+    "concept": true,
+    "retrain": true
+  }
+]

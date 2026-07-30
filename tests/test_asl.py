@@ -677,3 +677,155 @@ class TestPlaceholders:
             f"extra_in_terraform={sorted(supplied - self.EXPECTED)} "
             f"missing_from_terraform={sorted(self.EXPECTED - supplied)}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Retrain state machine (M5)
+# ---------------------------------------------------------------------------
+
+RETRAIN_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[1] / "statemachines" / "retrain.asl.json"
+)
+
+
+@pytest.fixture(scope="module")
+def retrain() -> dict[str, Any]:
+    loaded: dict[str, Any] = json.loads(RETRAIN_PATH.read_text(encoding="utf-8"))
+    return loaded
+
+
+@pytest.fixture(scope="module")
+def retrain_states(retrain: dict[str, Any]) -> dict[str, Any]:
+    states_map: dict[str, Any] = retrain["States"]
+    return states_map
+
+
+class TestRetrainSafety:
+    """The properties that stop an automated path from model to production."""
+
+    def test_registration_is_always_pending_manual_approval(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """The safety property the whole milestone rests on.
+
+        Hardcoded rather than parameterised: if it were an input, a caller could
+        pass "Approved" and the model would deploy itself.
+        """
+        params = retrain_states["RegisterCandidate"]["Parameters"]
+        assert params["ModelApprovalStatus"] == "PendingManualApproval"
+
+    def test_approval_status_is_not_taken_from_input(
+        self, retrain: dict[str, Any]
+    ) -> None:
+        raw = json.dumps(retrain)
+        assert '"ModelApprovalStatus.$"' not in raw, (
+            "approval status is read from execution input — a caller could pass "
+            "Approved and self-deploy"
+        )
+
+    def test_the_state_machine_never_deploys(self, retrain: dict[str, Any]) -> None:
+        """No endpoint API anywhere. Deployment is triggered by a human's approval
+        event, not by this workflow."""
+        raw = json.dumps(retrain)
+        for forbidden in (
+            "createEndpoint",
+            "updateEndpoint",
+            "createEndpointConfig",
+            "UpdateEndpoint",
+        ):
+            assert forbidden not in raw, (
+                f"the retrain state machine calls {forbidden} — it must stop at "
+                "registration and let a human approval trigger the deploy"
+            )
+
+    def test_a_rejected_candidate_ends_in_success(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """The gate working is the system functioning, not an error.
+
+        Failing the execution would put a permanent error rate on the retrain state
+        machine and train people to ignore it.
+        """
+        assert retrain_states["Gate"]["Default"] == "NotifyGateFailed"
+        assert retrain_states["RejectedByGate"]["Type"] == "Succeed"
+
+    def test_a_pipeline_failure_is_distinct_from_a_rejection(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """Conflating them means nobody can tell "the model did not improve" from
+        "the training job crashed"."""
+        assert retrain_states["RetrainFailed"]["Type"] == "Fail"
+        assert retrain_states["RejectedByGate"]["Type"] == "Succeed"
+
+    def test_the_gate_decision_is_not_reimplemented_in_asl(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """One definition of "better".
+
+        The Choice reads a boolean computed by evaluate.evaluate_gate. Re-expressing
+        the comparison as ASL Choice rules would create a second definition that can
+        drift from the tested one — and the untested copy would be the one blocking
+        releases.
+        """
+        choices = retrain_states["Gate"]["Choices"]
+        assert len(choices) == 1
+        assert choices[0]["Variable"] == "$.gate_input.metrics.gate.passed"
+        assert choices[0]["BooleanEquals"] is True
+
+    def test_evaluation_uses_the_same_entrypoint_as_m1(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """A gate comparing numbers from two code paths compares two different things."""
+        spec = retrain_states["Evaluate"]["Parameters"]["AppSpecification"]
+        assert spec["ContainerEntrypoint"] == ["python", "-m", "src.training.evaluate"]
+        assert "--champion-metrics" in spec["ContainerArguments"]
+
+    def test_every_task_has_retry_and_catch(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        for name, state in retrain_states.items():
+            if state.get("Type") != "Task":
+                continue
+            assert state.get("Retry"), f"{name} has no Retry"
+            assert state.get("Catch"), f"{name} has no Catch"
+
+    def test_every_transition_target_exists(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        for name, state in retrain_states.items():
+            targets = set()
+            if "Next" in state:
+                targets.add(state["Next"])
+            if "Default" in state:
+                targets.add(state["Default"])
+            for choice in state.get("Choices", []):
+                targets.add(choice["Next"])
+            for catcher in state.get("Catch", []):
+                targets.add(catcher["Next"])
+            for target in targets:
+                assert target in retrain_states, f"{name} -> {target} does not exist"
+
+    def test_the_trigger_reason_is_recorded(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """"Why does version 7 exist" is the first question asked when a model
+        misbehaves."""
+        metadata = retrain_states["RegisterCandidate"]["Parameters"][
+            "CustomerMetadataProperties"
+        ]
+        # Keys carrying a JSONPath value are suffixed `.$` in ASL.
+        recorded = {key.removesuffix(".$") for key in metadata}
+        for key in ("trigger_source", "drift_report_uri", "drift_verdict"):
+            assert key in recorded
+
+    def test_the_approval_notification_warns_about_sampling_bias(
+        self, retrain_states: dict[str, Any]
+    ) -> None:
+        """The person approving is the last line of defence against the bias.
+
+        Telling them at the moment of decision is worth more than a README section
+        they read once.
+        """
+        message = retrain_states["NotifyAwaitingApproval"]["Parameters"]["Message.$"]
+        assert "sampling-bias" in message or "sampling bias" in message
+        assert "per-class" in message

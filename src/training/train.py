@@ -203,6 +203,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         feature_matrix = vectorizer.transform(texts)
         feature_names = list(vectorizer.get_feature_names_out())
 
+    # Score the held-out golden set purely to establish the confidence reference.
+    # The model is never fitted on it; this is a read-only pass whose only output is
+    # the distribution the drift job compares against. Without it the baseline records
+    # training-set confidence, which is inflated by memorisation and makes every
+    # production window look decayed.
+    holdout_confidences: list[float] | None = None
+    golden_path = args.train_dir / "golden.jsonl"
+    if golden_path.is_file():
+        golden_docs = read_jsonl(golden_path)
+        if golden_docs:
+            golden_proba = classifier.predict_proba([d.text for d in golden_docs])
+            holdout_confidences = metrics_module.top_class_confidence(
+                golden_proba
+            ).tolist()
+    else:
+        print(
+            f"WARNING: no golden set at {golden_path}; the baseline's confidence "
+            "reference will come from training data and will be inflated by "
+            "memorisation. Drift runs against it will over-report decay.",
+            file=sys.stderr,
+        )
+
     baseline_artifact = baseline_module.build_baseline(
         texts=texts,
         predictions=predictions,
@@ -212,6 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         git_sha=lineage.git_sha,
         feature_matrix=feature_matrix,
         feature_names=feature_names,
+        holdout_confidences=holdout_confidences,
     )
     (args.output_dir / BASELINE_FILENAME).write_text(
         dumps_canonical(baseline_artifact), encoding="utf-8"

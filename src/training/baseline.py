@@ -192,6 +192,7 @@ def build_baseline(
     git_sha: str,
     feature_matrix: Any | None = None,
     feature_names: Sequence[str] | None = None,
+    holdout_confidences: Sequence[float] | None = None,
     n_confidence_bins: int = CALIBRATION_BINS,
 ) -> dict[str, Any]:
     """Assemble the baseline artifact.
@@ -200,6 +201,10 @@ def build_baseline(
     training split, not the golden set. Using the golden set would make the
     baseline describe 240 documents the model never saw, which is a worse
     description of "normal" than the data it actually learned from.
+
+    `holdout_confidences` is the exception, and must come from the GOLDEN set. See
+    the module docstring: a training-set confidence reference bakes in the
+    memorisation gap and makes every production window look decayed.
     """
     if not (len(texts) == len(predictions) == len(confidences)):
         raise ValueError(
@@ -232,7 +237,15 @@ def build_baseline(
             token_counts, TOKEN_HISTOGRAM_EDGES
         ).to_dict(),
         # --- calibration / concept-drift-proxy reference ---
+        # Held-out where available. `confidence_source` records which, so a drift job
+        # reading an older artifact can tell whether the reference is trustworthy
+        # rather than silently comparing against an inflated one.
         "confidence": summarise(
+            list(holdout_confidences if holdout_confidences else confidences),
+            [i / n_confidence_bins for i in range(n_confidence_bins + 1)],
+        ).to_dict(),
+        "confidence_source": "golden_holdout" if holdout_confidences else "train",
+        "confidence_train_reference": summarise(
             list(confidences),
             [i / n_confidence_bins for i in range(n_confidence_bins + 1)],
         ).to_dict(),
