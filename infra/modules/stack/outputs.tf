@@ -93,3 +93,31 @@ output "endpoint_rollback_alarm_names" {
   description = "Alarms wired into the endpoint's auto_rollback_configuration."
   value       = try(module.endpoint[0].rollback_alarm_names, [])
 }
+
+# --- Intake orchestration (M3). Null when deploy_intake is false. ----------
+
+output "intake_state_machine_arn" {
+  description = "Intake state machine ARN, or null when not deployed."
+  value       = one(module.intake[*].state_machine_arn)
+}
+
+output "intake_review_api_endpoint" {
+  description = "Reviewer API base URL, or null. POST /reviews/corrections, SigV4-signed."
+  value       = one(module.intake[*].review_api_endpoint)
+}
+
+output "intake_dead_letter_queue_url" {
+  description = "Intake dead-letter queue URL, or null."
+  value       = one(module.intake[*].dead_letter_queue_url)
+}
+
+output "intake_table_names" {
+  description = "The five intake DynamoDB tables, or null when not deployed."
+  value = try({
+    ledger      = module.intake[0].ledger_table_name
+    results     = module.intake[0].results_table_name
+    review      = module.intake[0].review_queue_table_name
+    corrections = module.intake[0].corrections_table_name
+    prompts     = module.intake[0].prompts_table_name
+  }, null)
+}

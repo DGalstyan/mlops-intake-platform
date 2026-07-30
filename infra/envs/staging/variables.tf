@@ -70,3 +70,21 @@ variable "endpoint_instance_type" {
   type        = string
   default     = "ml.t3.medium"
 }
+
+variable "deploy_intake" {
+  description = "Create the intake orchestration (state machine, tables, Lambdas, review API)."
+  type        = bool
+  default     = false
+}
+
+variable "lambda_package_path" {
+  description = "Path to the built Lambda zip, relative to this root. Produced by `make package-lambdas`."
+  type        = string
+  default     = "../../../build/intake-lambda.zip"
+}
+
+variable "bedrock_model_id" {
+  description = "Bedrock model for field extraction."
+  type        = string
+  default     = "anthropic.claude-3-5-haiku-20241022-v1:0"
+}

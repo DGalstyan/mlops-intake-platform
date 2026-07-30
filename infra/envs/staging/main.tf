@@ -30,6 +30,10 @@ module "stack" {
   model_package_arn      = var.model_package_arn
   endpoint_instance_type = var.endpoint_instance_type
 
+  deploy_intake       = var.deploy_intake
+  lambda_package_path = var.lambda_package_path
+  bedrock_model_id    = var.bedrock_model_id
+
   raw_expiration_days               = var.raw_expiration_days
   processed_transition_days         = var.processed_transition_days
   artifacts_transition_ia_days      = var.artifacts_transition_ia_days

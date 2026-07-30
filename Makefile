@@ -13,7 +13,7 @@ endif
 
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
         measure-throughput docker-build docker-smoke resolve-approved smoke-test \
-        simulate-intake prompts \
+        simulate-intake prompts package-lambdas seed-prompts wildcard-audit \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -86,10 +86,10 @@ validate-all:
 	$(MAKE) validate ENV=dev
 	$(MAKE) validate ENV=staging
 
-plan: init
+plan: init package-lambdas
 	cd $(ENV_DIR) && terraform plan -var-file="$(ENV).tfvars"
 
-apply: init
+apply: init package-lambdas
 	cd $(ENV_DIR) && terraform apply -var-file="$(ENV).tfvars"
 
 # `make destroy` tears down one environment's stack (KMS, ECR, buckets, IAM
@@ -205,3 +205,38 @@ simulate-intake: venv
 prompts: venv
 	$(PY) -c "from src.pipeline.prompts import render_all; \
 	          [print(f'=== {k} ===\n{v.prompt}\n') for k, v in render_all().items()]"
+
+# Stage and zip the Lambda package. Only the four modules the handlers actually
+# import: they depend on nothing outside the standard library and boto3 (which the
+# runtime provides), so there is no dependency layer and no build container.
+# Deliberately excludes src/training and src/inference — they pull in scikit-learn,
+# which would add ~90MB to a package that never imports it.
+BUILD_DIR := build
+LAMBDA_STAGE := $(BUILD_DIR)/lambda
+LAMBDA_ZIP := $(BUILD_DIR)/intake-lambda.zip
+
+package-lambdas:
+	rm -rf $(LAMBDA_STAGE) $(LAMBDA_ZIP)
+	mkdir -p $(LAMBDA_STAGE)/src/pipeline
+	cp src/__init__.py src/config.py $(LAMBDA_STAGE)/src/
+	cp src/pipeline/__init__.py src/pipeline/handlers.py \
+	   src/pipeline/validate.py src/pipeline/review_api.py \
+	   $(LAMBDA_STAGE)/src/pipeline/
+	cd $(LAMBDA_STAGE) && zip -qr ../../$(LAMBDA_ZIP) .
+	@echo "built $(LAMBDA_ZIP) ($$(du -h $(LAMBDA_ZIP) | cut -f1))"
+
+# Write the rendered prompts into DynamoDB. Run after apply, and again after any
+# schema change — the prompt is data, so a schema edit needs no redeploy.
+PROMPTS_TABLE ?= intake-$(ENV)-prompts
+seed-prompts: venv
+	$(PY) scripts/seed_prompts.py --table $(PROMPTS_TABLE) --region $(REGION)
+
+# Regenerate the Resource:"*" inventory. A command rather than a number written into
+# a comment, because a hardcoded count rots — an earlier revision said "six" and went
+# stale the moment M3 added more sites.
+wildcard-audit:
+	@echo "Resource: \"*\" sites in infra/ (see docs/decisions.md for why each is unavoidable):"
+	@grep -rn 'resources = \["\*"\]' infra/ || echo "  none"
+	@echo ""
+	@echo "Principal/Action wildcards (expected: one Deny-on-insecure-transport):"
+	@grep -rn 'identifiers = \["\*"\]\|actions = \["s3:\*"\]' infra/ || echo "  none"

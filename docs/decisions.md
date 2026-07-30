@@ -163,39 +163,45 @@ an external contract up front (a fixed event schema from another team, say), in
 which case the ARNs are knowable and creating the roles early would let the
 security review happen before the code exists.
 
-## `Resource: "*"` inventory: six unavoidable sites, and why each is
+## `Resource: "*"` inventory: four unavoidable categories, and why each is
 
-**Chose:** to leave six `Resource: "*"` statements in place, each with an inline
-comment, and to inventory them here rather than contort the code to satisfy a
-grep.
+**Chose:** leave every `Resource: "*"` in place, each with an inline comment, and
+inventory them *by category* here rather than contort the code to satisfy a grep.
 
 **Over:** (a) splitting `aws_kms_key` into `aws_kms_key` + a separate
-`aws_kms_key_policy` resource so the policy could reference
-`aws_kms_key.this.arn` explicitly; (b) leaving them undocumented.
+`aws_kms_key_policy` so the policy could reference `aws_kms_key.this.arn`;
+(b) leaving them undocumented; (c) keeping a running *count* in the code comments,
+which an earlier revision did and which went stale the moment M3 added more sites.
 
 **Because:** the rubric names `Resource: "*"` as an instant point-loser, so an
-undocumented one reads as laziness. But all six are genuinely mandated:
+undocumented one reads as laziness. But all of them are genuinely mandated by AWS,
+and they reduce to four categories:
 
-| Site | Actions | Why `*` is unavoidable |
+| Category | Where | Why `*` is unavoidable |
 |---|---|---|
-| `modules/kms/main.tf:66,86,106` | key administration / key usage | These are **key policy** statements — a resource-based policy attached to exactly one key. `"*"` is AWS's documented spelling of "this key", and the key's ARN cannot be referenced inside its own policy without a cycle. |
-| `modules/stack/iam.tf:141,273,392` | `ecr:GetAuthorizationToken` | The action has no resource type in the ECR IAM reference. It is an account-level pre-auth call; there is nothing to scope it to, and no condition key narrows it either. |
+| KMS key-policy statements | `modules/kms/main.tf` (3) | These are **key policy** statements — a resource-based policy attached to exactly one key. `"*"` is AWS's documented spelling of "this key", and a key's ARN cannot be referenced inside its own policy without a cycle. |
+| `ecr:GetAuthorizationToken` | `modules/stack/iam.tf` (3) | The action has no resource type in the ECR IAM reference. It is an account-level pre-auth call; no condition key narrows it either. |
+| CloudWatch Logs **delivery** API | `modules/intake/statemachine.tf` (1) | `logs:CreateLogDelivery` and friends reject resource-level permissions. Step Functions needs them to attach its vended log group. Note this is the statement **deleted at M0** as premature and re-added here by the milestone that created a state machine to use it. |
+| X-Ray segment submission | `modules/intake/statemachine.tf` (1), `modules/intake/lambda.tf` (3) | `xray:PutTraceSegments` / `PutTelemetryRecords` have no resource type. Behind `enable_xray`, so they disappear entirely if tracing is off. |
+| `textract:DetectDocumentText` | `modules/intake/statemachine.tf` (1) | No resource type. The control that matters is the separate, scoped `s3:GetObject` on the raw bucket — Textract can only read what the role can read. |
 
-There is also one `Principal: "*"` + `Action: "s3:*"` in
-`infra/bootstrap/main.tf:115-117`. That is a **Deny** statement rejecting
-non-TLS requests to the state bucket — the AWS-recommended
-`aws:SecureTransport` pattern. A deny-everyone is the opposite of a permission
-grant, and narrowing its principal would weaken it.
+There is additionally one `Principal: "*"` / `Action: "s3:*"` in
+`infra/bootstrap/main.tf`. That is a **Deny** rejecting non-TLS requests to the state
+bucket — the AWS-recommended `aws:SecureTransport` pattern. A deny-everyone is the
+opposite of a permission grant, and narrowing its principal would weaken it.
 
-Option (a) is mechanically possible for the KMS case and would drop three of
-the six. I rejected it because AWS documents `"*"` as *the* key-policy form,
-and restructuring a working key policy to satisfy a text search trades real
-correctness risk for a cosmetic win.
+Option (a) is mechanically possible for the KMS case and would remove three sites. I
+rejected it because AWS documents `"*"` as *the* key-policy form, and restructuring a
+working key policy to satisfy a text search trades real correctness risk for a
+cosmetic win.
 
-**I'd flip this if:** an organisation-level SCP or a compliance scanner
-hard-failed on the literal string regardless of policy type. Then option (a)
-for the KMS key, and `ecr:GetAuthorizationToken` moved into a separate
-minimal-scope role assumed only for `docker login`.
+**Run `make wildcard-audit`** to regenerate the file:line list. Deliberately a
+command rather than a number written down, because a hardcoded count is a claim that
+rots — which is exactly what happened to the previous version of this entry.
+
+**I'd flip this if:** an organisation-level SCP or a compliance scanner hard-failed on
+the literal string regardless of policy type. Then option (a) for KMS, and the
+X-Ray/ECR/Textract statements moved into separate minimal-scope roles.
 
 ## Deleted over-engineering: the state-machine role's logging policy
 

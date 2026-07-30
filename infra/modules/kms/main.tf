@@ -118,14 +118,15 @@ data "aws_iam_policy_document" "key_policy" {
 # resource cycle (the key doesn't exist yet while its policy is being
 # computed).
 #
-# `Resource: "*"` appears in exactly six places in infra/, each unavoidable:
-# three key-policy statements in this file, and three
-# `ecr:GetAuthorizationToken` statements in stack/iam.tf (that action has no
-# resource type in the ECR IAM reference — it is a pre-auth, account-level
-# call). There is also one Deny-on-insecure-transport bucket policy in
-# infra/bootstrap/main.tf that uses Principal "*" and Action "s3:*", which is
-# a deny, not a grant. The full inventory with file:line and the AWS
-# restriction behind each is in docs/decisions.md.
+# Do not maintain a count of `Resource: "*"` sites here — an earlier revision did,
+# and it went stale the moment M3 added more. The authoritative, file:line inventory
+# with the AWS restriction behind each site lives in docs/decisions.md, under
+# "Resource: "*" inventory", and `make wildcard-audit` regenerates the raw list.
+#
+# Every occurrence falls into one of four categories, all of which are AWS
+# restrictions rather than scoping choices: KMS key-policy self-reference (this
+# file), `ecr:GetAuthorizationToken`, the CloudWatch Logs *delivery* API, and X-Ray
+# segment submission.
 resource "aws_kms_key" "this" {
   description = var.description
 

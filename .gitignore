@@ -55,6 +55,7 @@ coverage.xml
 # is what ties a model to its data.
 /data/
 /artifacts/
+/build/
 model.tar.gz
 *.joblib
 *.pkl

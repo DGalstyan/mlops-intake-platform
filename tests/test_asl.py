@@ -540,25 +540,62 @@ class TestCorrelationId:
 
 
 class TestPlaceholders:
+    EXPECTED = {
+        "LedgerTable",
+        "ResultsTable",
+        "ReviewQueueTable",
+        "CorrectionsTable",
+        "PromptsTable",
+        "EndpointName",
+        "BedrockModelId",
+        "DeadLetterQueueUrl",
+        "NormalizeOcrFunctionArn",
+        "ValidateFunctionArn",
+    }
+
     def test_all_placeholders_are_known(self, definition: dict[str, Any]) -> None:
         """Terraform substitutes these; an unknown one deploys a broken definition."""
         import re
 
         raw = json.dumps(definition)
         found = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", raw))
-        expected = {
-            "LedgerTable",
-            "ResultsTable",
-            "ReviewQueueTable",
-            "CorrectionsTable",
-            "PromptsTable",
-            "EndpointName",
-            "BedrockModelId",
-            "DeadLetterQueueUrl",
-            "NormalizeOcrFunctionArn",
-            "ValidateFunctionArn",
-        }
-        assert found == expected, (
-            f"placeholder mismatch. unexpected={sorted(found - expected)} "
-            f"missing={sorted(expected - found)}"
+        assert found == self.EXPECTED, (
+            f"placeholder mismatch. unexpected={sorted(found - self.EXPECTED)} "
+            f"missing={sorted(self.EXPECTED - found)}"
+        )
+
+    def test_terraform_substitutes_exactly_these_placeholders(self) -> None:
+        """The ASL and the Terraform that renders it must stay in step.
+
+        `templatefile` fails at plan time on a *missing* variable, so that half is
+        caught by a plan. But an EXTRA variable in the Terraform map is silently
+        ignored — so removing a placeholder from the ASL while leaving its
+        substitution behind leaves dead configuration that reads as if it were wired
+        up. Both directions are checked here, without needing a plan.
+        """
+        import re
+
+        statemachine_tf = (
+            Path(__file__).resolve().parents[1]
+            / "infra"
+            / "modules"
+            / "intake"
+            / "statemachine.tf"
+        ).read_text(encoding="utf-8")
+
+        # The templatefile(...) call's variable map, i.e. the block between the ASL
+        # path and the closing brace.
+        match = re.search(
+            r"templatefile\(\s*\n?\s*\"[^\"]*intake\.asl\.json\",\s*\{(.*?)\n\s*\}\s*\n\s*\)",
+            statemachine_tf,
+            re.DOTALL,
+        )
+        assert match, "could not locate the templatefile call in statemachine.tf"
+
+        supplied = set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", match.group(1), re.M))
+        assert supplied == self.EXPECTED, (
+            f"Terraform supplies {sorted(supplied)} but the ASL declares "
+            f"{sorted(self.EXPECTED)}. "
+            f"extra_in_terraform={sorted(supplied - self.EXPECTED)} "
+            f"missing_from_terraform={sorted(self.EXPECTED - supplied)}"
         )

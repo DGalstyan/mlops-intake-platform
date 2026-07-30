@@ -152,3 +152,35 @@ variable "alarm_sns_topic_arns" {
   type        = list(string)
   default     = []
 }
+
+# --- Intake orchestration (M3) ---------------------------------------------
+
+variable "deploy_intake" {
+  description = "Create the intake state machine, its data stores, Lambdas and review API. Requires a built Lambda package (`make package-lambdas`)."
+  type        = bool
+  default     = false
+}
+
+variable "lambda_package_path" {
+  description = "Path to the built Lambda zip, produced by `make package-lambdas`. Read as a file, so a plan with deploy_intake=true and no package fails loudly rather than deploying an empty function."
+  type        = string
+  default     = "../../../build/intake-lambda.zip"
+}
+
+variable "bedrock_model_id" {
+  description = "Bedrock foundation model used for field extraction. A variable because 'Bedrock deprecates the version you pinned' must be a tfvars edit, not a code change."
+  type        = string
+  default     = "anthropic.claude-3-5-haiku-20241022-v1:0"
+}
+
+variable "enable_xray" {
+  description = "Enable X-Ray tracing on the state machine and pipeline Lambdas."
+  type        = bool
+  default     = true
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch Logs retention for pipeline log groups."
+  type        = number
+  default     = 14
+}

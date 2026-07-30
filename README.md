@@ -26,7 +26,7 @@ and tested locally; M4–M6 are not started.
 | **M0** Foundations (IaC) | **Code complete, never applied** | `infra/` — state backend, KMS, ECR, 4 buckets, per-component IAM. `terraform validate` + `fmt` clean on all three roots. |
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
-| **M3** Orchestration + HITL | **ASL + handlers complete and tested; NO Terraform, never executed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. Prompts rendered from schemas. Local simulation produces the two required traces. |
+| **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
 | M4 Observability | Not started | — |
 | M5 Drift + Retraining | Not started | — |
 | M6 CI/CD | Not started | `.github/workflows/` is empty |
@@ -325,14 +325,22 @@ The ones worth knowing before reading the code:
 
 ### On `Resource: "*"`
 
-There are six, and they are inventoried with file:line and the AWS restriction
-behind each in `docs/decisions.md`. Summary: three are **KMS key-policy**
-statements, where `"*"` is AWS's documented spelling of "this key" and the key's
-ARN cannot reference itself without a cycle; three are
-`ecr:GetAuthorizationToken`, which has no resource type in the ECR IAM
-reference. There is additionally one `Principal: "*"` / `Action: "s3:*"` in the
-bootstrap root — that one is a **Deny** rejecting non-TLS requests to the state
-bucket, which is the point.
+Every occurrence falls into one of four categories, all AWS restrictions rather than
+scoping choices: **KMS key-policy self-reference** (a key's ARN cannot appear inside
+its own policy), **`ecr:GetAuthorizationToken`**, the **CloudWatch Logs delivery
+API**, and **X-Ray segment submission** — none of which support resource-level
+permissions. There is also one `textract:DetectDocumentText`, where the control that
+matters is the separately-scoped `s3:GetObject` on the raw bucket: Textract can only
+read what the role can read.
+
+`docs/decisions.md` carries the per-category inventory with the AWS restriction
+behind each, and `make wildcard-audit` regenerates the file:line list. Deliberately a
+command rather than a count in prose — an earlier revision hardcoded "six" and it
+went stale as soon as M3 landed.
+
+There is additionally one `Principal: "*"` / `Action: "s3:*"` in the bootstrap root.
+That one is a **Deny** rejecting non-TLS requests to the state bucket, which is the
+point.
 
 There is no `iam:*`, no `Action: "*"` grant, and no service-level action
 wildcard anywhere.
@@ -352,11 +360,14 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
 
 **M3 specifically**
 
-- **The M3 infrastructure does not exist.** The ASL definition, the three Lambda
-  handlers and the prompt renderer are written and tested, but the Terraform that
-  would deploy them — the state machine, five DynamoDB tables, three Lambda
-  functions, the EventBridge rule, the review API Gateway and the SQS dead-letter
-  queue — is **not written**. This is the largest single gap in the repo.
+- **Nothing is deployed.** The Terraform now exists and validates, but no state
+  machine, table, Lambda or API has been created. Every claim below about runtime
+  behaviour is a design claim, not an observation.
+- **The reviewer API has no real authorisation model.** The route is `AWS_IAM`
+  authorised so it is not open to the internet, but `reviewer_id` comes from the
+  request body and is trusted. "Which humans may review which documents" is a real
+  access-control question this does not answer. A shared API key would have looked
+  like an answer and been worse.
 - **The traces in `evidence/m3/` are from a local simulation, not a Step Functions
   execution.** The routing logic, validator, correction flow and idempotency
   semantics are genuinely exercised; Textract, Bedrock, DynamoDB and Step Functions
