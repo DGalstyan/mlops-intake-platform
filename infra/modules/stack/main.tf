@@ -5,6 +5,17 @@
 
 data "aws_caller_identity" "current" {}
 
+# Looked up rather than constructed as a string. IAM validates that a federated
+# principal exists when the role is created, so if the bootstrap root has not
+# been applied, a constructed ARN fails with "MalformedPolicyDocument: Invalid
+# principal in policy" — an error that names neither the OIDC provider nor the
+# bootstrap step. This data source fails first, and says exactly what is
+# missing. It also means the stack does not care whether the bootstrap root
+# created the provider or it already existed in the account.
+data "aws_iam_openid_connect_provider" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
 locals {
   name_prefix = "${var.project}-" # e.g. "intake-"
   account_id  = data.aws_caller_identity.current.account_id
@@ -16,15 +27,25 @@ locals {
   # key it is allowed to use). Both sides are still enforced: the KMS module
   # grants these exact ARNs in its key policy, and the iam_role modules below
   # attach a permission policy referencing the *real* module.kms.key_arn.
-  training_role_arn        = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}training-${var.environment}"
-  endpoint_role_arn        = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}endpoint-${var.environment}"
-  ci_deploy_role_arn       = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}ci-deploy-${var.environment}"
-  github_oidc_provider_arn = "arn:aws:iam::${local.account_id}:oidc-provider/token.actions.githubusercontent.com"
+  training_role_arn  = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}training-${var.environment}"
+  endpoint_role_arn  = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}endpoint-${var.environment}"
+  ci_deploy_role_arn = "arn:aws:iam::${local.account_id}:role/${local.name_prefix}ci-deploy-${var.environment}"
 
-  # Must match infra/bootstrap's state bucket naming exactly.
-  state_bucket_name = "intake-tfstate-${local.account_id}"
+  github_oidc_provider_arn = data.aws_iam_openid_connect_provider.github_actions.arn
+
+  # Derived with the same expression as infra/bootstrap/main.tf's
+  # local.state_bucket_name, from the same two inputs (project, account). It
+  # cannot be read from the bootstrap root's output — that root keeps local
+  # state, which is gitignored and absent on CI runners — so "derivable from
+  # project + account" is the contract between the two roots. Change one and
+  # you must change the other.
+  state_bucket_name = "${var.project}-tfstate-${local.account_id}"
   state_bucket_arn  = "arn:aws:s3:::${local.state_bucket_name}"
 
+  # `environment` is also a provider-level default_tag, so this is redundant
+  # there — it is kept because each module below merges `component` into it,
+  # and a provider default cannot vary per resource. See docs/decisions.md,
+  # "Why component is tagged per-resource".
   common_tags = {
     environment = var.environment
   }

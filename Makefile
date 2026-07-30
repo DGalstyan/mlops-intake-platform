@@ -11,7 +11,7 @@ ifneq ($(filter-out dev staging,$(ENV)),)
 $(error ENV must be "dev" or "staging", got "$(ENV)")
 endif
 
-.PHONY: help bootstrap destroy-bootstrap init fmt validate plan apply destroy test
+.PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all plan apply destroy test
 
 help:
 	@echo "Targets:"
@@ -31,13 +31,22 @@ bootstrap:
 destroy-bootstrap:
 	cd $(BOOTSTRAP_DIR) && terraform destroy -var="region=$(REGION)"
 
-# Reads the state bucket name straight from the bootstrap root's own local
-# state/output — no manual copy-pasting of the bucket name, no committed
-# backend.hcl. Requires `make bootstrap` to have been applied first.
+# The state bucket name is DERIVED from (project, account), not read from the
+# bootstrap root's state. That root keeps local state, which is gitignored, so
+# a `terraform output` lookup only works on the one machine that ran
+# `make bootstrap` — it fails on a fresh clone and on every CI runner, which
+# would make the M6 deploy path impossible. Deriving it needs nothing but
+# credentials. Override STATE_BUCKET explicitly if you renamed it.
+# Must stay in step with local.state_bucket_name in infra/bootstrap/main.tf
+# and infra/modules/stack/main.tf.
+PROJECT ?= intake
+STATE_BUCKET ?= $(PROJECT)-tfstate-$(shell aws sts get-caller-identity --query Account --output text 2>/dev/null)
+
 init:
-	$(eval STATE_BUCKET := $(shell cd $(BOOTSTRAP_DIR) && terraform output -raw state_bucket_name))
-	@if [ -z "$(STATE_BUCKET)" ]; then \
-		echo "error: could not read state_bucket_name from $(BOOTSTRAP_DIR) — run 'make bootstrap' first."; \
+	@if ! echo "$(STATE_BUCKET)" | grep -qE '^$(PROJECT)-tfstate-[0-9]{12}$$'; then \
+		echo "error: could not derive the state bucket name (got '$(STATE_BUCKET)')."; \
+		echo "       Check your AWS credentials — 'aws sts get-caller-identity' must work."; \
+		echo "       Or pass it explicitly: make $(MAKECMDGOALS) STATE_BUCKET=my-bucket"; \
 		exit 1; \
 	fi
 	cd $(ENV_DIR) && terraform init \
@@ -48,6 +57,10 @@ init:
 fmt:
 	terraform fmt -recursive
 
+# Non-mutating counterpart of `fmt`, for CI: fails instead of rewriting files.
+fmt-check:
+	terraform fmt -check -recursive
+
 # Deliberately uses `-backend=false` rather than depending on `init`: validation
 # must run with no AWS credentials and no bootstrapped state bucket, so that it
 # works on a fresh clone and in the M6 pull-request workflow. Covers the
@@ -56,6 +69,12 @@ validate:
 	cd $(BOOTSTRAP_DIR) && terraform init -backend=false -input=false >/dev/null && terraform validate
 	cd $(ENV_DIR) && terraform init -backend=false -input=false >/dev/null && terraform validate
 
+# `validate` only covers the selected ENV, so it never touches staging. CI runs
+# this one.
+validate-all:
+	$(MAKE) validate ENV=dev
+	$(MAKE) validate ENV=staging
+
 plan: init
 	cd $(ENV_DIR) && terraform plan -var-file="$(ENV).tfvars"
 
@@ -63,12 +82,23 @@ apply: init
 	cd $(ENV_DIR) && terraform apply -var-file="$(ENV).tfvars"
 
 # `make destroy` tears down one environment's stack (KMS, ECR, buckets, IAM
-# roles). It does NOT tear down the shared state backend or the GitHub OIDC
-# provider — those are bootstrap resources shared across environments and
-# are torn down separately with `make destroy-bootstrap` once every
-# environment has been destroyed. See docs/decisions.md.
+# roles). Two things deliberately survive it:
+#
+#   1. The shared state backend and the GitHub OIDC provider — bootstrap
+#      resources shared across environments. Tear them down with
+#      `make destroy-bootstrap` AFTER every environment is destroyed.
+#   2. The KMS key, which enters PendingDeletion for 7 days (AWS's minimum;
+#      zero is not permitted) and keeps billing ~$0.23 prorated per
+#      environment. The alias is deleted immediately, so the key appears in
+#      the console without a friendly name. Nothing can shorten this.
+#
+# Everything else is gone when this returns. See the README teardown section.
 destroy: init
 	cd $(ENV_DIR) && terraform destroy -var-file="$(ENV).tfvars"
+	@echo ""
+	@echo "NOTE: the KMS key for ENV=$(ENV) is now PendingDeletion for 7 days"
+	@echo "      and still bills (~\$$0.23 prorated). This is AWS's floor."
+	@echo "      Run 'make destroy-bootstrap' once ALL environments are down."
 
 test:
 	@echo "No application tests exist yet (see tasks/M1+)."

@@ -9,8 +9,8 @@ output "state_bucket_arn" {
 }
 
 output "github_oidc_provider_arn" {
-  description = "ARN of the account's GitHub Actions OIDC provider, referenced (by deterministic ARN, not this output) by the ci-deploy role trust policy in infra/modules/stack."
-  value       = aws_iam_openid_connect_provider.github_actions.arn
+  description = "ARN of the GitHub Actions OIDC provider created by this root, or null when create_github_oidc_provider is false. The environment roots do not read this output — they look the provider up by URL with a data source, so they work whether or not this root created it."
+  value       = one(aws_iam_openid_connect_provider.github_actions[*].arn)
 }
 
 output "region" {

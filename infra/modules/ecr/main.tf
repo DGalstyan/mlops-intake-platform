@@ -41,6 +41,23 @@ resource "aws_ecr_lifecycle_policy" "untagged_expiry" {
         action = {
           type = "expire"
         }
+      },
+      {
+        # With IMMUTABLE tags every build pushes a new tag that is never
+        # overwritten, so tagged images accumulate forever without this. Keeping
+        # the last N means a rollback target is always present while old
+        # versions stop paying storage. Lowest priority so the untagged rule
+        # above always wins.
+        rulePriority = 2
+        description  = "Keep only the most recent ${var.tagged_image_retain_count} images"
+        selection = {
+          tagStatus   = "any"
+          countType   = "imageCountMoreThan"
+          countNumber = var.tagged_image_retain_count
+        }
+        action = {
+          type = "expire"
+        }
       }
     ]
   })

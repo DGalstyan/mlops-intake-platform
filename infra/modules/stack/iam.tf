@@ -8,11 +8,18 @@
 # guessing at a resource ARN — the milestone that creates each Lambda also
 # creates and scopes its role, following this same pattern.
 #
-# The state-machine role is created now (Step Functions is core to M3/M5)
-# but its permission policy is limited to what exists today: its own log
-# group. Actions against the SageMaker endpoint, Textract, Bedrock, and the
-# DynamoDB review table are added when those resources exist, so the policy
-# never has to reference a resource that isn't real yet.
+# The state-machine role is created now (Step Functions is core to M3/M5) but
+# carries NO permission policy at all — see the note above the role itself.
+# Actions against the SageMaker endpoint, Textract, Bedrock, the DynamoDB
+# review table, and its own log group are added when those resources exist, so
+# the policy never has to reference a resource that isn't real yet.
+#
+# Every service trust policy below carries aws:SourceAccount and a scoped
+# aws:SourceArn. Without them, any principal in this account holding
+# iam:PassRole on these roles could drive them from their own SageMaker job or
+# state machine — the confused-deputy problem. The SourceArn patterns are
+# intentionally wider than a single resource ARN because the resources they
+# name do not exist until M1-M3; they still pin the account and region.
 
 # ---------------------------------------------------------------------------
 # training role — assumed by the SageMaker Training Job.
@@ -24,6 +31,16 @@ data "aws_iam_policy_document" "training_assume" {
     principals {
       type        = "Service"
       identifiers = ["sagemaker.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:sagemaker:${var.region}:${local.account_id}:*"]
     }
   }
 }
@@ -51,10 +68,25 @@ data "aws_iam_policy_document" "training_permissions" {
   }
 
   statement {
-    sid       = "WriteModelArtifacts"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
+    sid    = "WriteModelArtifacts"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      # model.tar.gz is uploaded multipart, and a retried or interrupted upload
+      # needs to abort and re-list its parts. Without these, a transient
+      # failure mid-upload leaves the training job unable to recover.
+      "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts",
+    ]
     resources = ["${module.artifacts_bucket.bucket_arn}/*"]
+  }
+
+  statement {
+    # SageMaker resolves a bucket's region before reading from it.
+    sid       = "ResolveBucketRegions"
+    effect    = "Allow"
+    actions   = ["s3:GetBucketLocation"]
+    resources = [module.raw_bucket.bucket_arn, module.processed_bucket.bucket_arn, module.artifacts_bucket.bucket_arn]
   }
 
   statement {
@@ -67,6 +99,28 @@ data "aws_iam_policy_document" "training_permissions" {
       "kms:DescribeKey",
     ]
     resources = [module.kms.key_arn]
+  }
+
+  statement {
+    # SageMaker creates a grant on the key to encrypt the training job's
+    # attached storage volume and its output artifacts. Without CreateGrant the
+    # first M1 training job fails with a KMS AccessDenied before it runs a line
+    # of Python.
+    #
+    # Kept in its own statement because kms:GrantIsForAWSResource is only
+    # present in the request context of the grant APIs. Attaching it to the
+    # statement above would make the Bool test evaluate against a missing key
+    # for Decrypt/Encrypt, silently denying them.
+    sid       = "AllowAwsResourceGrantsOnProjectKey"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant"]
+    resources = [module.kms.key_arn]
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
   }
 
   statement {
@@ -124,6 +178,16 @@ data "aws_iam_policy_document" "endpoint_assume" {
       type        = "Service"
       identifiers = ["sagemaker.amazonaws.com"]
     }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:sagemaker:${var.region}:${local.account_id}:*"]
+    }
   }
 }
 
@@ -150,10 +214,21 @@ data "aws_iam_policy_document" "endpoint_permissions" {
   }
 
   statement {
-    sid       = "WriteDataCapture"
-    effect    = "Allow"
-    actions   = ["s3:PutObject"]
+    sid    = "WriteDataCapture"
+    effect = "Allow"
+    actions = [
+      "s3:PutObject",
+      "s3:AbortMultipartUpload",
+      "s3:ListMultipartUploadParts",
+    ]
     resources = ["${module.data_capture_bucket.bucket_arn}/*"]
+  }
+
+  statement {
+    sid       = "ResolveBucketRegions"
+    effect    = "Allow"
+    actions   = ["s3:GetBucketLocation"]
+    resources = [module.artifacts_bucket.bucket_arn, module.data_capture_bucket.bucket_arn]
   }
 
   statement {
@@ -166,6 +241,22 @@ data "aws_iam_policy_document" "endpoint_permissions" {
       "kms:DescribeKey",
     ]
     resources = [module.kms.key_arn]
+  }
+
+  statement {
+    # See the equivalent statement on the training role: the endpoint needs a
+    # grant to encrypt its data-capture output with the CMK. Separate statement
+    # because kms:GrantIsForAWSResource only exists in the grant APIs' context.
+    sid       = "AllowAwsResourceGrantsOnProjectKey"
+    effect    = "Allow"
+    actions   = ["kms:CreateGrant"]
+    resources = [module.kms.key_arn]
+
+    condition {
+      test     = "Bool"
+      variable = "kms:GrantIsForAWSResource"
+      values   = ["true"]
+    }
   }
 
   statement {
@@ -222,52 +313,34 @@ data "aws_iam_policy_document" "state_machine_assume" {
       type        = "Service"
       identifiers = ["states.amazonaws.com"]
     }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:states:${var.region}:${local.account_id}:stateMachine:${local.name_prefix}*"]
+    }
   }
 }
 
-data "aws_iam_policy_document" "state_machine_permissions" {
-  statement {
-    sid    = "StateMachineLogs"
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogDelivery",
-      "logs:DeleteLogDelivery",
-      "logs:DescribeLogGroups",
-      "logs:DescribeResourcePolicies",
-      "logs:GetLogDelivery",
-      "logs:ListLogDeliveries",
-      "logs:PutResourcePolicy",
-      "logs:UpdateLogDelivery",
-    ]
-    # The CloudWatch Logs *delivery* API (used by Step Functions execution
-    # logging) does not support resource-level permissions — AWS requires
-    # Resource "*" for these specific actions (documented AWS restriction:
-    # https://docs.aws.amazon.com/step-functions/latest/dg/cw-logs.html).
-    # This is the one place in this stack's IAM policies where that applies;
-    # it is not a substitute for scoping PutLogEvents, which is scoped below.
-    resources = ["*"]
-  }
-
-  statement {
-    sid    = "StateMachineOwnLogGroup"
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-    ]
-    resources = [
-      "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/vendedlogs/states/${local.name_prefix}intake-${var.environment}*:*",
-    ]
-  }
-}
+# Deliberately no permission policy at M0. An earlier revision attached the
+# CloudWatch Logs *delivery* actions here, which AWS requires on Resource "*".
+# That granted the ability to attach a resource policy to any log group in the
+# account to a role that has nothing to run, because no state machine exists
+# until M3 — a wildcard with no corresponding capability. Deleted; M3 re-adds
+# it alongside the state machine that needs it. See docs/decisions.md,
+# "Deleted over-engineering".
 
 module "state_machine_role" {
   source = "../iam_role"
 
   role_name               = "${local.name_prefix}state-machine-${var.environment}"
-  description             = "Step Functions execution role (component=state-machine, env=${var.environment}). Trust-only at M0; task-invoke permissions added in M3/M5 alongside the resources they target."
+  description             = "Step Functions execution role (component=state-machine, env=${var.environment}). Trust-only at M0; task-invoke and logging permissions added in M3/M5 alongside the resources they target."
   assume_role_policy_json = data.aws_iam_policy_document.state_machine_assume.json
-  inline_policy_json      = data.aws_iam_policy_document.state_machine_permissions.json
+  inline_policy_json      = null
 
   tags = merge(local.common_tags, { component = "state-machine" })
 }
@@ -295,12 +368,18 @@ data "aws_iam_policy_document" "ci_deploy_assume" {
       values   = ["sts.amazonaws.com"]
     }
     condition {
+      # Only the default branch and pull-request contexts, never "any ref".
+      # `repo:<org>/<repo>:*` would let a workflow on any branch of a PUBLIC
+      # repo mint credentials that can delete this environment's Terraform
+      # state. M6 splits this further into an apply-capable role trusted only
+      # by refs/heads/main and a plan-only role trusted by pull_request, at
+      # which point the pull_request entry moves off this role entirely.
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      # Any ref of this one repo. M6 should narrow this further (e.g. to
-      # ref:refs/heads/main for apply-capable runs vs. pull_request for
-      # plan-only runs) once the workflow structure is final.
-      values = ["repo:${var.github_repository}:*"]
+      values = [
+        "repo:${var.github_repository}:ref:refs/heads/main",
+        "repo:${var.github_repository}:pull_request",
+      ]
     }
   }
 }
@@ -336,7 +415,12 @@ data "aws_iam_policy_document" "ci_deploy_permissions" {
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["envs/${var.environment}/*"]
+      # `env:/*` is required in addition to this environment's own key prefix:
+      # Terraform's S3 backend enumerates workspaces during `init` by listing
+      # under `env:/`, and a condition that omits it makes `terraform init`
+      # fail with AccessDenied. Listing key names is not the sensitive
+      # operation here — GetObject is, and that stays scoped below.
+      values = ["envs/${var.environment}/*", "env:/*"]
     }
   }
 

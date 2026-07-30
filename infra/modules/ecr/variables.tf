@@ -14,6 +14,12 @@ variable "untagged_image_expiry_days" {
   default     = 14
 }
 
+variable "tagged_image_retain_count" {
+  description = "How many images to keep. Tags are immutable, so every build adds one permanently without this cap. 10 keeps several rollback targets available."
+  type        = number
+  default     = 10
+}
+
 variable "tags" {
   description = "Resource tags merged with provider default_tags."
   type        = map(string)
