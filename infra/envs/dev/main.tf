@@ -30,6 +30,8 @@ module "stack" {
   endpoint_instance_type = var.endpoint_instance_type
 
   deploy_intake       = var.deploy_intake
+  deploy_retrain      = var.deploy_retrain
+  numpy_layer_arn     = var.numpy_layer_arn
   lambda_package_path = var.lambda_package_path
   bedrock_model_id    = var.bedrock_model_id
 

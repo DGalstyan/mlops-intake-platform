@@ -239,6 +239,24 @@ resource "aws_sagemaker_endpoint" "this" {
 
   tags = merge(var.tags, { Name = local.endpoint_name })
 
+  lifecycle {
+    # A promotion is an event-driven deploy, not a terraform apply. When someone
+    # approves a model version in the registry, the M5 promote state machine
+    # creates a new endpoint config and calls UpdateEndpoint — so this attribute
+    # legitimately drifts away from what Terraform wrote, and every subsequent
+    # plan would otherwise offer to revert production to the model that happened
+    # to be current at apply time.
+    #
+    # The alternative — running terraform apply from an approval event — means an
+    # event handler holding permission to change arbitrary infrastructure, which
+    # is a much worse trade than accepting drift on one attribute.
+    #
+    # Terraform still owns the endpoint's identity, its alarms, its autoscaling
+    # and its data capture defaults. It just does not own which model version is
+    # live, and the registry is the record of that.
+    ignore_changes = [endpoint_config_name]
+  }
+
   depends_on = [
     # Named explicitly: auto_rollback_configuration references these alarms by
     # name, which Terraform cannot see as a dependency, so without this the

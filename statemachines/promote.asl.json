@@ -1,0 +1,260 @@
+{
+  "Comment": "Promote an APPROVED model package to the endpoint, as a canary.\n\nStarted by an EventBridge rule on the SageMaker Model Package State Change event with ModelApprovalStatus=Approved. This is the other half of the human gate: the retrain state machine registers a candidate and stops; a person approving it in the Model Registry emits the event that starts this. Nothing else can start it — the retrain workflow has no path here.\n\nThree direct SDK calls, no Lambda. UpdateEndpoint carries its own DeploymentConfig, so the canary shift and the alarm-driven auto-rollback are configured on the call itself rather than inherited from the endpoint resource.\n\nNOTE ON TERRAFORM DRIFT: this deliberately changes the endpoint's EndpointConfigName outside Terraform. The endpoint resource carries lifecycle { ignore_changes = [endpoint_config_name] } for exactly that reason — a promotion is an event-driven deploy, and the alternative (running terraform apply from an approval event) would mean an event handler with permission to change arbitrary infrastructure.",
+  "StartAt": "CheckApprovalStatus",
+  "TimeoutSeconds": 3600,
+  "States": {
+    "CheckApprovalStatus": {
+      "Comment": "Refuse anything that is not an approval. The EventBridge rule already filters on ModelApprovalStatus=Approved, but this state machine's whole purpose is to be the only automated path to production — so it re-checks rather than trusting its trigger. A rule edited by mistake should not be able to deploy a rejected model.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.detail.ModelApprovalStatus",
+          "StringEquals": "Approved",
+          "Next": "CreateModel"
+        }
+      ],
+      "Default": "NotApproved"
+    },
+
+    "NotApproved": {
+      "Comment": "Terminal success. A rejection or a status change to PendingManualApproval is a normal event, not a failure — failing here would put a permanent error rate on this state machine and make a real promotion failure invisible.",
+      "Type": "Succeed"
+    },
+
+    "CreateModel": {
+      "Comment": "Create a SageMaker model from the approved package. The name carries the execution id so a second promotion never collides with the first — the same reason the Terraform-managed model omits a static name.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sagemaker:createModel",
+      "Parameters": {
+        "ModelName.$": "States.Format('${ModelNamePrefix}-{}', States.ArrayGetItem(States.StringSplit($$.Execution.Name, ':'), 0))",
+        "ExecutionRoleArn": "${EndpointRoleArn}",
+        "Containers": [
+          {
+            "ModelPackageName.$": "$.detail.ModelPackageArn"
+          }
+        ]
+      },
+      "ResultPath": "$.model",
+      "Retry": [
+        {
+          "ErrorEquals": ["SageMaker.SdkClientException", "States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyPromotionFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CreateEndpointConfig"
+    },
+
+    "CreateEndpointConfig": {
+      "Comment": "New endpoint configuration pointing at the new model, carrying the same data-capture settings as the Terraform-managed one. Data capture must be repeated here: an endpoint config is immutable, so a promotion that omitted it would silently turn off the input to M5's drift detection.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sagemaker:createEndpointConfig",
+      "Parameters": {
+        "EndpointConfigName.$": "States.Format('${EndpointConfigNamePrefix}-{}', States.ArrayGetItem(States.StringSplit($$.Execution.Name, ':'), 0))",
+        "KmsKeyId": "${KmsKeyArn}",
+        "ProductionVariants": [
+          {
+            "VariantName": "AllTraffic",
+            "ModelName.$": "$.model.ModelName",
+            "InitialInstanceCount": ${InitialInstanceCount},
+            "InstanceType": "${InstanceType}",
+            "InitialVariantWeight": 1
+          }
+        ],
+        "DataCaptureConfig": {
+          "EnableCapture": true,
+          "InitialSamplingPercentage": ${DataCaptureSamplingPercentage},
+          "DestinationS3Uri": "${DataCaptureS3Uri}",
+          "KmsKeyId": "${KmsKeyArn}",
+          "CaptureOptions": [
+            { "CaptureMode": "Input" },
+            { "CaptureMode": "Output" }
+          ],
+          "CaptureContentTypeHeader": {
+            "JsonContentTypes": ["application/json"]
+          }
+        }
+      },
+      "ResultPath": "$.endpoint_config",
+      "Retry": [
+        {
+          "ErrorEquals": ["SageMaker.SdkClientException", "States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyPromotionFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CanaryDeploy"
+    },
+
+    "CanaryDeploy": {
+      "Comment": "THE CANARY. UpdateEndpoint shifts ${CanaryTrafficPercentage}% of traffic to the new variant, holds for ${CanaryBakeTimeMinutes} minutes while the rollback alarms are watched, then completes. If either alarm breaches during the bake, SageMaker reverts to the previous configuration automatically and this call reports failure.\n\nThe alarms are the SAME ones Terraform attached to the endpoint — named here rather than re-declared, so there is one definition of 'this deployment is going wrong'.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sagemaker:updateEndpoint",
+      "Parameters": {
+        "EndpointName": "${EndpointName}",
+        "EndpointConfigName.$": "$.endpoint_config.EndpointConfigName",
+        "RetainAllVariantProperties": false,
+        "DeploymentConfig": {
+          "BlueGreenUpdatePolicy": {
+            "TrafficRoutingConfiguration": {
+              "Type": "CANARY",
+              "WaitIntervalInSeconds": ${CanaryBakeTimeSeconds},
+              "CanarySize": {
+                "Type": "CAPACITY_PERCENT",
+                "Value": ${CanaryTrafficPercentage}
+              }
+            },
+            "TerminationWaitInSeconds": 600,
+            "MaximumExecutionTimeoutInSeconds": 1800
+          },
+          "AutoRollbackConfiguration": {
+            "Alarms": [
+              { "AlarmName": "${FiveXxAlarmName}" },
+              { "AlarmName": "${LatencyAlarmName}" }
+            ]
+          }
+        }
+      },
+      "ResultPath": "$.deployment",
+      "Retry": [
+        {
+          "Comment": "Only a transient SDK failure is retried. A deployment REJECTED by the rollback alarms must not be retried — retrying a bad model is how an auto-rollback gets defeated by its own pipeline.",
+          "ErrorEquals": ["SageMaker.SdkClientException"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 2,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyRolledBack",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "NotifyPromoted"
+    },
+
+    "NotifyPromoted": {
+      "Comment": "The canary completed without breaching an alarm.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Model promoted to the endpoint",
+        "Message.$": "States.Format('An approved model package was deployed to ${EndpointName} via a {}% canary and completed without breaching a rollback alarm.\n\nPackage: {}\nApproved by: {}\n\nWatch the auto-approval rate and confidence p10 on the dashboard for the next hour — the rollback alarms cover 5xx and latency, not model quality, and a model that serves fast and wrong will pass them.', '${CanaryTrafficPercentage}', $.detail.ModelPackageArn, $.detail.ModelApprovalStatus)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Promoted",
+          "ResultPath": "$.notify_error"
+        }
+      ],
+      "Next": "Promoted"
+    },
+
+    "Promoted": {
+      "Type": "Succeed"
+    },
+
+    "NotifyRolledBack": {
+      "Comment": "The canary failed — most likely the rollback alarms breached and SageMaker reverted. Distinct from a promotion-pipeline failure: the endpoint is healthy and serving the PREVIOUS model, which is the system working as designed.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Canary deploy ROLLED BACK",
+        "Message.$": "States.Format('A canary deployment to ${EndpointName} did not complete. If the rollback alarms breached, SageMaker has already reverted and the endpoint is serving the PREVIOUS model — no action is needed to restore service.\n\nPackage: {}\nError: {}\n\nInvestigate before re-approving: the same package will deploy again if approved a second time.', $.detail.ModelPackageArn, States.JsonToString($.error))"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "RolledBack",
+          "ResultPath": "$.notify_error"
+        }
+      ],
+      "Next": "RolledBack"
+    },
+
+    "RolledBack": {
+      "Type": "Fail",
+      "Error": "CanaryRolledBack",
+      "Cause": "The canary deployment did not complete. The endpoint is serving the previous model."
+    },
+
+    "NotifyPromotionFailed": {
+      "Comment": "The promotion pipeline itself broke before any traffic shifted — a failed CreateModel or CreateEndpointConfig. No deployment was attempted, so no rollback happened and the endpoint is untouched.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlarmTopicArn}",
+        "Subject": "Model promotion FAILED before deploying",
+        "Message.$": "States.Format('Promotion of an approved model package failed before any traffic shifted. The endpoint is UNCHANGED and still serving the current model.\n\nPackage: {}\nError: {}', $.detail.ModelPackageArn, States.JsonToString($.error))"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PromotionFailed",
+          "ResultPath": "$.notify_error"
+        }
+      ],
+      "Next": "PromotionFailed"
+    },
+
+    "PromotionFailed": {
+      "Type": "Fail",
+      "Error": "PromotionFailed",
+      "Cause": "Promotion failed before deploying. The endpoint is unchanged."
+    }
+  }
+}

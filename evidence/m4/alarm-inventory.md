@@ -18,7 +18,7 @@ system-health alarm can be green while the model is quietly wrong — which is t
 whole reason the model-quality proxies exist. None of them measures accuracy:
 there is no ground truth in production.
 
-**10 alarms**, 2 in `endpoint`, 1 in `intake`, 7 in `observability`.
+**11 alarms**, 2 in `endpoint`, 1 in `intake`, 7 in `observability`, 1 in `retrain`.
 
 | Alarm | Measures | Module |
 |---|---|---|
@@ -32,6 +32,7 @@ there is no ground truth in production.
 | `intake-dev-intake-executions-failed` | system health | `observability` |
 | `intake-dev-human-override-rate-high` | model quality (primary proxy) | `observability` |
 | `intake-dev-schema-failure-rate-high` | model quality (extraction) | `observability` |
+| `${local.prefix}-drift-job-failing` | system health | `retrain` |
 
 ---
 
@@ -121,6 +122,16 @@ there is no ground truth in production.
 - **Fires when:** Extraction output failed schema or field-rule validation on more than ${var.schema_failure_rate_ceiling_percent}% of documents.
 - **What breaks:** those documents go to human review instead of auto-approving. This is an EXTRACTION-MODEL signal, not a pipeline one — the pipeline is working correctly when this fires.
 - **First response:** the dashboard's failed-field breakdown names which field is failing. A single field failing across one class usually means a changed document layout; every field failing usually means a prompt or model change.
+- **Notifies:** the platform SNS topic (`intake-<env>-alarms`). No email is subscribed by default — an unconfirmed email subscription looks configured while delivering nothing.
+
+## `retrain` — see module docs
+
+### `${local.prefix}-drift-job-failing`
+
+- **Measures:** system health
+- **Fires when:** The scheduled drift job is erroring.
+- **What breaks:** nothing in the serving path — but drift stops being detected, and the failure is SILENT because a job that does not run produces no report and no breach. This alarm exists because the absence of bad news is not good news.
+- **First response:** read the function's logs. A missing numpy layer and a baseline artifact that has not been uploaded are the two most likely causes, and both fail at cold start with a clear import or key error.
 - **Notifies:** the platform SNS topic (`intake-<env>-alarms`). No email is subscribed by default — an unconfirmed email subscription looks configured while delivering nothing.
 
 ---

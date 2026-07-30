@@ -148,3 +148,23 @@ output "model_package_group_name" {
   description = "Model Package Group. Managed by Terraform so `make destroy` removes it along with its versions — it was previously created by boto3 and survived teardown."
   value       = aws_sagemaker_model_package_group.classifier.model_package_group_name
 }
+
+# --- Retrain loop (M5). Null when deploy_retrain is false. -----------------
+
+output "drift_function_name" {
+  value = one(module.retrain[*].drift_function_name)
+}
+
+output "retrain_state_machine_arn" {
+  description = "Retrain state machine. Registers candidates; deliberately has no path to production."
+  value       = one(module.retrain[*].retrain_state_machine_arn)
+}
+
+output "promote_state_machine_arn" {
+  description = "Promote state machine, startable only by the registry-approval rule."
+  value       = one(module.retrain[*].promote_state_machine_arn)
+}
+
+output "drift_report_s3_prefix" {
+  value = one(module.retrain[*].drift_report_s3_prefix)
+}

@@ -192,3 +192,29 @@ variable "alarm_email" {
   type        = string
   default     = ""
 }
+
+# --- Retrain loop (M5) -----------------------------------------------------
+
+variable "deploy_retrain" {
+  description = "Create the drift job, the retrain state machine, and the approval-triggered promotion. Requires a built Lambda package."
+  type        = bool
+  default     = false
+}
+
+variable "numpy_layer_arn" {
+  description = "Lambda layer providing numpy for the drift job. AWS's managed AWSSDKPandas-Python312 layer bundles it; the version suffix differs by region, so look it up rather than guessing."
+  type        = string
+  default     = ""
+}
+
+variable "image_tag" {
+  description = "Tag of the inference image the retrain jobs run. CI pushes by commit SHA; ECR has immutable tags, so this is content-addressed rather than a moving `latest`."
+  type        = string
+  default     = "latest"
+}
+
+variable "git_sha" {
+  description = "Commit recorded as lineage on registered model versions."
+  type        = string
+  default     = "unknown"
+}

@@ -88,3 +88,15 @@ variable "bedrock_model_id" {
   type        = string
   default     = "anthropic.claude-3-5-haiku-20241022-v1:0"
 }
+
+variable "deploy_retrain" {
+  description = "Create the M5 loop: drift job, retrain state machine, approval-triggered promotion."
+  type        = bool
+  default     = false
+}
+
+variable "numpy_layer_arn" {
+  description = "Lambda layer providing numpy for the drift job. Look up the region-specific ARN for AWSSDKPandas-Python312."
+  type        = string
+  default     = ""
+}

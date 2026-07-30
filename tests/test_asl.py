@@ -865,3 +865,382 @@ class TestRetrainSafety:
         message = retrain_states["NotifyAwaitingApproval"]["Parameters"]["Message.$"]
         assert "sampling-bias" in message or "sampling bias" in message
         assert "per-class" in message
+
+
+# ---------------------------------------------------------------------------
+# Promote state machine (M5)
+#
+# The retrain tests above prove nothing deploys itself. These prove the other
+# half: that the one thing which CAN deploy only does so behind a human's
+# approval, and that it does not quietly break drift detection on the way.
+# ---------------------------------------------------------------------------
+
+PROMOTE_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[1] / "statemachines" / "promote.asl.json"
+)
+
+
+@pytest.fixture(scope="module")
+def promote() -> dict[str, Any]:
+    # The raw file is a template, not valid JSON — ${InitialInstanceCount} appears
+    # unquoted where a number belongs. Substituting plausible values is what
+    # Terraform does at plan time, so this parses the thing that actually deploys
+    # rather than a stringified approximation of it.
+    raw = PROMOTE_PATH.read_text(encoding="utf-8")
+    for name, value in _PROMOTE_NUMERIC_STUBS.items():
+        raw = raw.replace("${" + name + "}", value)
+    loaded: dict[str, Any] = json.loads(raw)
+    return loaded
+
+
+_PROMOTE_NUMERIC_STUBS: Final[dict[str, str]] = {
+    "InitialInstanceCount": "1",
+    "DataCaptureSamplingPercentage": "100",
+    "CanaryTrafficPercentage": "10",
+    "CanaryBakeTimeSeconds": "300",
+}
+
+
+@pytest.fixture(scope="module")
+def promote_states(promote: dict[str, Any]) -> dict[str, Any]:
+    states_map: dict[str, Any] = promote["States"]
+    return states_map
+
+
+class TestPromoteIsTheOnlyDoorToProduction:
+    def test_it_refuses_anything_that_is_not_an_approval(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """The EventBridge rule already filters on Approved. This re-checks anyway.
+
+        A rule is a piece of configuration someone can widen by accident while
+        debugging; this state machine is the only automated path to the endpoint, so
+        it does not trust its own trigger.
+        """
+        check = promote_states["CheckApprovalStatus"]
+        assert check["Type"] == "Choice"
+        assert len(check["Choices"]) == 1
+        assert check["Choices"][0]["Variable"] == "$.detail.ModelApprovalStatus"
+        assert check["Choices"][0]["StringEquals"] == "Approved"
+        assert promote_states[check["Default"]]["Type"] == "Succeed"
+
+    def test_the_deployed_package_comes_from_the_event(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """The package deployed must be the package that was approved.
+
+        If the ARN were a parameter, approving version 3 and deploying version 4
+        would be one typo apart and would look identical in the execution history.
+        """
+        container = promote_states["CreateModel"]["Parameters"]["Containers"][0]
+        assert container["ModelPackageName.$"] == "$.detail.ModelPackageArn"
+
+    def test_only_the_approval_rule_can_start_it(self) -> None:
+        """Terraform side of the same property.
+
+        Exactly one IAM policy in the module grants states:StartExecution on the
+        promote state machine, and it belongs to the EventBridge role for the
+        approval rule. Anything else with that permission is a second door.
+        """
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "infra"
+            / "modules"
+            / "retrain"
+            / "statemachines.tf"
+        ).read_text(encoding="utf-8")
+
+        grants = [
+            block
+            for block in source.split("statement {")
+            if "aws_sfn_state_machine.promote" in block and "StartExecution" in block
+        ]
+        assert len(grants) == 1, (
+            f"{len(grants)} policy statements can start the promote state machine; "
+            "exactly one (the approval rule's EventBridge role) should be able to"
+        )
+
+    def test_the_approval_rule_filters_on_approved_only(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "infra"
+            / "modules"
+            / "retrain"
+            / "statemachines.tf"
+        ).read_text(encoding="utf-8")
+        rule = source.split('resource "aws_cloudwatch_event_rule" "model_approved"')[1]
+        pattern = rule.split("tags")[0]
+        assert 'ModelApprovalStatus   = ["Approved"]' in pattern
+        assert "ModelPackageGroupName" in pattern, (
+            "the rule does not scope to this model package group — an approval in "
+            "any group in the account would deploy to this endpoint"
+        )
+
+
+class TestCanary:
+    def test_the_deploy_is_a_canary_not_an_all_at_once(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        policy = promote_states["CanaryDeploy"]["Parameters"]["DeploymentConfig"][
+            "BlueGreenUpdatePolicy"
+        ]
+        routing = policy["TrafficRoutingConfiguration"]
+        assert routing["Type"] == "CANARY"
+        assert routing["CanarySize"]["Value"] < 100
+        assert routing["WaitIntervalInSeconds"] > 0, (
+            "a zero bake time means the canary completes before any alarm has "
+            "enough datapoints to fire, which is an all-at-once deploy wearing a "
+            "canary's name"
+        )
+
+    def test_rollback_is_wired_to_alarms(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        rollback = promote_states["CanaryDeploy"]["Parameters"]["DeploymentConfig"][
+            "AutoRollbackConfiguration"
+        ]
+        assert len(rollback["Alarms"]) >= 2
+
+    def test_the_rollback_alarms_are_terraform_managed_not_invented_here(
+        self, promote: dict[str, Any]
+    ) -> None:
+        """One definition of "this deployment is going wrong".
+
+        The alarm names are placeholders Terraform fills from the same variables it
+        used to name the alarms on the endpoint. Hardcoding names here would let the
+        two drift apart, and the failure mode is silent: a rollback config naming an
+        alarm that does not exist deploys without any rollback trigger at all.
+        """
+        raw = json.dumps(promote)
+        assert "${FiveXxAlarmName}" in raw
+        assert "${LatencyAlarmName}" in raw
+
+    def test_a_rejected_deploy_is_not_retried(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """The one retry rule that matters here.
+
+        Retrying a deployment the rollback alarms just rejected is how a pipeline
+        defeats its own safety mechanism — eventually one attempt sneaks past the
+        alarm's evaluation window. Only transient SDK failures are retried.
+        """
+        for retrier in promote_states["CanaryDeploy"]["Retry"]:
+            for error in retrier["ErrorEquals"]:
+                assert error not in ("States.ALL", "States.TaskFailed"), (
+                    f"CanaryDeploy retries {error}, which includes a deployment "
+                    "rejected by the rollback alarms"
+                )
+
+    def test_a_rollback_is_reported_differently_from_a_broken_pipeline(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """Two very different pages at 3am.
+
+        A rollback means the endpoint is healthy and serving the old model — the
+        system worked. A pipeline failure means nothing was attempted. Sending the
+        same message for both wastes the responder's first ten minutes.
+        """
+        rolled_back = promote_states["NotifyRolledBack"]["Parameters"]["Message.$"]
+        failed = promote_states["NotifyPromotionFailed"]["Parameters"]["Message.$"]
+        assert "PREVIOUS model" in rolled_back
+        assert "UNCHANGED" in failed
+        assert rolled_back != failed
+
+        catches = {
+            catcher["Next"]
+            for name in ("CreateModel", "CreateEndpointConfig")
+            for catcher in promote_states[name]["Catch"]
+        }
+        assert catches == {"NotifyPromotionFailed"}, (
+            "a failure before any traffic shifted routes to the rollback message"
+        )
+
+
+class TestPromotionDoesNotBreakDrift:
+    def test_the_new_endpoint_config_keeps_data_capture_on(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """The subtle one.
+
+        An endpoint config is immutable, so a promotion builds a new one from
+        scratch. Omitting DataCaptureConfig would turn off the only input to M5's
+        drift detection — and nothing would alarm, because a drift job with no data
+        reports no drift. The system would look healthy precisely because it had
+        gone blind.
+        """
+        capture = promote_states["CreateEndpointConfig"]["Parameters"][
+            "DataCaptureConfig"
+        ]
+        assert capture["EnableCapture"] is True
+        assert capture["InitialSamplingPercentage"] > 0
+        modes = {option["CaptureMode"] for option in capture["CaptureOptions"]}
+        assert modes == {"Input", "Output"}, (
+            "drift compares input distributions AND the predicted-class mix; "
+            f"capturing only {sorted(modes)} loses half the signal"
+        )
+
+    def test_the_new_config_is_encrypted_with_the_project_key(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        params = promote_states["CreateEndpointConfig"]["Parameters"]
+        assert params["KmsKeyId"] == "${KmsKeyArn}"
+        assert params["DataCaptureConfig"]["KmsKeyId"] == "${KmsKeyArn}"
+
+    def test_terraform_stops_owning_the_live_config(self) -> None:
+        """The promotion changes EndpointConfigName outside Terraform.
+
+        Without ignore_changes, the next plan offers to revert production to
+        whatever model was current at apply time — and someone eventually says yes
+        to that plan without reading it.
+        """
+        endpoint_tf = (
+            Path(__file__).resolve().parents[1]
+            / "infra"
+            / "modules"
+            / "endpoint"
+            / "main.tf"
+        ).read_text(encoding="utf-8")
+        resource = endpoint_tf.split('resource "aws_sagemaker_endpoint" "this"')[1]
+        assert "ignore_changes = [endpoint_config_name]" in resource
+
+
+class TestPromoteStructure:
+    def test_names_do_not_collide_across_promotions(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """Two promotions in one day must not fight over a name.
+
+        SageMaker model and endpoint-config names are immutable and unique per
+        account, so a static name makes the second promotion fail — after it has
+        already been approved, which is the worst moment to discover it.
+        """
+        model_name = promote_states["CreateModel"]["Parameters"]["ModelName.$"]
+        config_name = promote_states["CreateEndpointConfig"]["Parameters"][
+            "EndpointConfigName.$"
+        ]
+        for expression in (model_name, config_name):
+            assert "$$.Execution.Name" in expression
+
+    def test_every_transition_target_exists(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        for name, state in promote_states.items():
+            targets = set()
+            if "Next" in state:
+                targets.add(state["Next"])
+            if "Default" in state:
+                targets.add(state["Default"])
+            for choice in state.get("Choices", []):
+                targets.add(choice["Next"])
+            for catcher in state.get("Catch", []):
+                targets.add(catcher["Next"])
+            for target in targets:
+                assert target in promote_states, f"{name} -> {target} does not exist"
+
+    def test_no_orphan_states(self, promote: dict[str, Any]) -> None:
+        reachable = {promote["StartAt"]}
+        frontier = [promote["StartAt"]]
+        while frontier:
+            state = promote["States"][frontier.pop()]
+            targets = set()
+            if "Next" in state:
+                targets.add(state["Next"])
+            if "Default" in state:
+                targets.add(state["Default"])
+            for choice in state.get("Choices", []):
+                targets.add(choice["Next"])
+            for catcher in state.get("Catch", []):
+                targets.add(catcher["Next"])
+            for target in targets - reachable:
+                reachable.add(target)
+                frontier.append(target)
+        assert reachable == set(promote["States"]), (
+            f"unreachable states: {sorted(set(promote['States']) - reachable)}"
+        )
+
+    def test_every_task_has_retry_and_catch(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        for name, state in promote_states.items():
+            if state.get("Type") != "Task":
+                continue
+            assert state.get("Retry"), f"{name} has no Retry"
+            assert state.get("Catch"), f"{name} has no Catch"
+
+    def test_a_failed_notification_never_hides_the_outcome(
+        self, promote_states: dict[str, Any]
+    ) -> None:
+        """SNS being down must not turn a rollback into a green execution."""
+        for notifier, terminal in (
+            ("NotifyRolledBack", "RolledBack"),
+            ("NotifyPromotionFailed", "PromotionFailed"),
+        ):
+            assert promote_states[notifier]["Catch"][0]["Next"] == terminal
+            assert promote_states[terminal]["Type"] == "Fail"
+
+    def test_has_a_top_level_timeout(self, promote: dict[str, Any]) -> None:
+        assert promote["TimeoutSeconds"] > 0
+
+    def test_every_state_has_a_comment(self, promote_states: dict[str, Any]) -> None:
+        missing = [
+            name
+            for name, state in promote_states.items()
+            if not state.get("Comment") and state.get("Type") not in ("Succeed", "Fail")
+        ]
+        assert not missing, f"states without a Comment: {missing}"
+
+
+class TestPromotePlaceholders:
+    EXPECTED = {
+        "ModelNamePrefix",
+        "EndpointConfigNamePrefix",
+        "EndpointRoleArn",
+        "EndpointName",
+        "KmsKeyArn",
+        "InstanceType",
+        "InitialInstanceCount",
+        "DataCaptureSamplingPercentage",
+        "DataCaptureS3Uri",
+        "CanaryTrafficPercentage",
+        "CanaryBakeTimeSeconds",
+        "CanaryBakeTimeMinutes",
+        "FiveXxAlarmName",
+        "LatencyAlarmName",
+        "AlarmTopicArn",
+    }
+
+    def test_terraform_supplies_exactly_the_declared_placeholders(self) -> None:
+        """Both directions, for the same reason as the intake check.
+
+        A missing variable fails at plan time; an extra one is silently ignored and
+        leaves configuration that reads as if it were wired up.
+        """
+        import re
+
+        raw = PROMOTE_PATH.read_text(encoding="utf-8")
+        found = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", raw))
+        assert found == self.EXPECTED, (
+            f"unexpected={sorted(found - self.EXPECTED)} "
+            f"missing={sorted(self.EXPECTED - found)}"
+        )
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "infra"
+            / "modules"
+            / "retrain"
+            / "statemachines.tf"
+        ).read_text(encoding="utf-8")
+        match = re.search(
+            r"templatefile\(\s*\n?\s*\"[^\"]*promote\.asl\.json\",\s*\{(.*?)\n\s*\}\s*\n\s*\)",
+            source,
+            re.DOTALL,
+        )
+        assert match, "could not locate the promote templatefile call"
+        supplied = set(
+            re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=", match.group(1), re.M)
+        )
+        assert supplied == self.EXPECTED, (
+            f"extra_in_terraform={sorted(supplied - self.EXPECTED)} "
+            f"missing_from_terraform={sorted(self.EXPECTED - supplied)}"
+        )

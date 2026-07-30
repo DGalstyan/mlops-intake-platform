@@ -181,8 +181,8 @@ and they reduce to four categories:
 |---|---|---|
 | KMS key-policy statements | `modules/kms/main.tf` (3) | These are **key policy** statements — a resource-based policy attached to exactly one key. `"*"` is AWS's documented spelling of "this key", and a key's ARN cannot be referenced inside its own policy without a cycle. |
 | `ecr:GetAuthorizationToken` | `modules/stack/iam.tf` (3) | The action has no resource type in the ECR IAM reference. It is an account-level pre-auth call; no condition key narrows it either. |
-| CloudWatch Logs **delivery** API | `modules/intake/statemachine.tf` (1) | `logs:CreateLogDelivery` and friends reject resource-level permissions. Step Functions needs them to attach its vended log group. Note this is the statement **deleted at M0** as premature and re-added here by the milestone that created a state machine to use it. |
-| X-Ray segment submission | `modules/intake/statemachine.tf` (1), `modules/intake/lambda.tf` (3) | `xray:PutTraceSegments` / `PutTelemetryRecords` have no resource type. Behind `enable_xray`, so they disappear entirely if tracing is off. |
+| CloudWatch Logs **delivery** API | `modules/intake/statemachine.tf` (1), `modules/retrain/statemachines.tf` (2) | `logs:CreateLogDelivery` and friends reject resource-level permissions. Step Functions needs them to attach its vended log group, so this repeats once per state machine. Note this is the statement **deleted at M0** as premature and re-added by each milestone that created a state machine to use it. |
+| X-Ray segment submission | `modules/intake/statemachine.tf` (1), `modules/intake/lambda.tf` (3), `modules/retrain/main.tf` (1) | `xray:PutTraceSegments` / `PutTelemetryRecords` have no resource type. Behind `enable_xray`, so they disappear entirely if tracing is off. |
 | `textract:DetectDocumentText` | `modules/intake/statemachine.tf` (1) | No resource type. The control that matters is the separate, scoped `s3:GetObject` on the raw bucket — Textract can only read what the role can read. |
 
 There is additionally one `Principal: "*"` / `Action: "s3:*"` in
@@ -1332,3 +1332,104 @@ obviously wrong to anyone who has run one of these systems.
 Audit sampling — routing a small random share of confidently auto-approved documents
 to review anyway — answers both questions with one change. It is not implemented, and
 saying so is worth more than implementing something weaker and claiming it suffices.
+
+## Two state machines for retrain and promote, not one with a wait state
+
+**Chose:** the retrain workflow ends at `RegisterCandidate` and stops. A separate
+promote state machine does the deploy, and the only thing that can start it is an
+EventBridge rule on `SageMaker Model Package State Change` with
+`ModelApprovalStatus = Approved`.
+
+**Over:** one state machine that trains, registers, and then parks on a
+`.waitForTaskToken` state until someone approves — which is how the intake workflow
+already handles human review, so the pattern was sitting right there.
+
+**Because:** the assignment's hard line is that retraining must never auto-deploy, and
+the two designs make very different promises about that. With a wait state, the code
+path from "training finished" to "traffic shifted" is continuous — the approval is a
+pause in a workflow that is already heading for production, and a `SendTaskSuccess`
+from anything holding the token resumes it. With two machines, there is no such path.
+The retrain role's IAM policy grants no SageMaker endpoint action at all, so even a
+retrain definition edited to call `UpdateEndpoint` would fail on permissions rather
+than deploy.
+
+It also survives the boring failure. A `.waitForTaskToken` execution holds the token
+in memory for the life of the execution; a week-long approval delay means a week-long
+running execution, and a task token that expires strands the candidate. The registry
+holds the pending version indefinitely with no execution running, and approving a
+three-week-old version works exactly like approving a fresh one.
+
+The cost is a real one: the promotion has no memory of the retrain that produced the
+candidate. Everything the promotion needs comes from the model package's own metadata,
+which is why the retrain workflow writes `trigger_source`, `drift_report_uri` and
+`drift_verdict` into `CustomerMetadataProperties` — that record is the only link, so
+it has to be complete at registration time.
+
+**I'd flip this if:** approvals became routine and same-day, and the operational cost
+of "which retrain produced this?" started to outweigh the separation. Even then I would
+keep the two roles distinct and pass an execution id through the metadata rather than
+merging the workflows.
+
+## The promote state machine re-checks the approval it was triggered by
+
+**Chose:** `CheckApprovalStatus` is the first state, and it re-reads
+`$.detail.ModelApprovalStatus` even though the EventBridge rule already filtered on it.
+
+**Over:** trusting the trigger, which is what the rule is for.
+
+**Because:** the rule is one `terraform apply` away from being wider than it looks, and
+the usual way that happens is someone loosening the pattern to debug why the rule is
+not firing and not tightening it afterwards. This state machine is the single automated
+path to the endpoint, so the check costs one Choice state and removes an entire class of
+"the filter was edited" incident. A rejection routes to `Succeed`, not `Fail` — a status
+change to `Rejected` is a normal event, and failing on it would put a permanent error
+rate on the one state machine whose failures should mean something.
+
+## The rollback alarms are named, not re-declared
+
+**Chose:** the promotion's `AutoRollbackConfiguration` names the same two alarms
+Terraform attached to the endpoint, passed in as `five_xx_alarm_name` and
+`latency_alarm_name`.
+
+**Over:** declaring alarms in the retrain module for the promotion to use.
+
+**Because:** two declarations of "this deployment is going wrong" drift apart, and the
+drift is invisible. `AutoRollbackConfiguration` takes alarm *names*, and SageMaker does
+not reject a name that does not exist — a deploy configured against a typo'd or deleted
+alarm runs with no rollback trigger and looks identical in the console to one that is
+protected. Naming the Terraform-managed alarms means the endpoint module owns the
+threshold, and there is exactly one place to change it.
+
+## The endpoint's live config is not Terraform's to own
+
+**Chose:** `lifecycle { ignore_changes = [endpoint_config_name] }` on
+`aws_sagemaker_endpoint`, accepting permanent drift on one attribute.
+
+**Over:** running `terraform apply` from the approval event so that state stays
+authoritative.
+
+**Because:** the alternative is an event-driven handler holding permission to change
+arbitrary infrastructure, which is a far worse thing to have in an account than one
+drifting attribute. Terraform still owns the endpoint's identity, its alarms, its
+autoscaling and its data-capture defaults; it just does not own which model version is
+live, and the Model Registry is the better record of that anyway.
+
+The failure this prevents is specific: without it, every plan after a promotion offers
+to revert production to whatever model was current at the last apply, and eventually
+someone approves that plan without reading it.
+
+## The promotion repeats the data-capture config instead of inheriting it
+
+**Chose:** `CreateEndpointConfig` in the promote definition restates
+`DataCaptureConfig` in full, duplicating what the endpoint module already declares.
+
+**Over:** leaving it out, on the reasonable-sounding grounds that the endpoint already
+has data capture enabled.
+
+**Because:** an endpoint config is immutable, so a promotion does not modify the old one
+— it builds a new one, and anything omitted is off. Silently turning off data capture
+would cut the only input to drift detection, and the failure is invisible in the worst
+possible way: a drift job with no data reports no drift, so the system looks healthiest
+at the moment it goes blind. There is a test asserting capture stays on across a
+promotion, with both Input and Output modes, because the duplication is exactly the kind
+of thing a later cleanup would remove.

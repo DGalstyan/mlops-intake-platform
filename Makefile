@@ -218,11 +218,18 @@ LAMBDA_ZIP := $(BUILD_DIR)/intake-lambda.zip
 
 package-lambdas:
 	rm -rf $(LAMBDA_STAGE) $(LAMBDA_ZIP)
-	mkdir -p $(LAMBDA_STAGE)/src/pipeline
+	mkdir -p $(LAMBDA_STAGE)/src/pipeline $(LAMBDA_STAGE)/src/drift
 	cp src/__init__.py src/config.py $(LAMBDA_STAGE)/src/
 	cp src/pipeline/__init__.py src/pipeline/handlers.py \
 	   src/pipeline/validate.py src/pipeline/review_api.py \
 	   $(LAMBDA_STAGE)/src/pipeline/
+# The M5 drift job ships in the same zip. One package for every function keeps
+# source_code_hash meaningful — a change anywhere redeploys everything, which is
+# what you want when src/config.py is shared by all of them. numpy is the one
+# dependency and comes from a layer, not from here.
+	cp src/drift/__init__.py src/drift/detect.py \
+	   src/drift/metrics.py src/drift/report.py \
+	   $(LAMBDA_STAGE)/src/drift/
 	cd $(LAMBDA_STAGE) && zip -qr ../../$(LAMBDA_ZIP) .
 	@echo "built $(LAMBDA_ZIP) ($$(du -h $(LAMBDA_ZIP) | cut -f1))"
 

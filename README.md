@@ -28,9 +28,9 @@ in the table below, and what is *unverified* about each is in Known gaps.
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 30-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger (S3 notifications enabled on the bucket), review API. Local simulation produces the two required traces. |
-| **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 10 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
-| **M5** Drift + Retraining | **Drift detection working with real evidence; retrain SM written, never run; no Terraform** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Retrain state machine with the gate and no deploy path. |
-| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 346 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
+| **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
+| **M5** Drift + Retraining | **Drift detection working with real evidence; the loop is Terraform-complete but has never run** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Scheduled drift Lambda, retrain state machine that registers and deliberately cannot deploy, and a separate promote state machine startable only by a human's registry approval. |
+| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 367 tests, 6 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
 account, because no AWS credentials are configured. So `fmt` and `validate` are
@@ -126,7 +126,7 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 346 tests, mypy-strict clean
+make test            # 367 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
@@ -476,7 +476,7 @@ asserting it never becomes a dimension.
 
 ### Alarms
 
-10 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
+11 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
 — generated from the Terraform by `make alarm-inventory`, with a test asserting the
 committed file matches a fresh render. Each carries what breaks, the first response,
 and a runbook link in its own description, because an alarm that fires at 3am without
@@ -580,10 +580,10 @@ Six milestones of code, none of it deployed. The split is worth stating plainly
 because it is the whole character of this submission:
 
 **Verified, by something other than my own assertion**
-- 346 tests, `mypy --strict` on 35 files, `ruff` clean, `terraform validate` on three roots
+- 367 tests, `mypy --strict` on 44 files, `ruff` clean, `terraform validate` on three roots
 - A **green PR and main run on GitHub Actions** — real CI, which caught three bugs local
   development had masked, including a container that could not have started on SageMaker
-- Five regression tests **proved** to fail on the regressions they target
+- Six regression tests **proved** to fail on the regressions they target
 - Real drift math against the real baseline, producing the three-verdict evidence
 - A real load measurement that corrected two of my own guessed thresholds
 
@@ -633,9 +633,12 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   retrain state machine is written and its safety properties are tested — registration
   is always `PendingManualApproval`, and no endpoint API appears anywhere in the
   definition — but it has **never executed**.
-- **No M5 Terraform.** The drift Lambda, its EventBridge schedule, the retrain state
-  machine and the EventBridge rule on registry approval are **not written**. The drift
-  code runs only via the CLI.
+- **The promotion path has never run.** It is now written — the promote state machine,
+  the approval rule, and the canary with auto-rollback — and its safety properties are
+  tested from both ends: the ASL re-checks the approval status rather than trusting its
+  trigger, and exactly one IAM statement in the module can start it. But nothing has
+  been applied, so "a human approves and a canary deploys" is a tested claim about
+  configuration, not an observed one.
 - **The drift reports are real, but the input is not production data.** The math runs
   against the actual M1 baseline and actual generated batches — no stubs — but the
   windows are locally-scored documents, not SageMaker data capture.
@@ -805,9 +808,6 @@ is verified to fail on the real defect rather than merely asserted.
 
 **Still genuinely absent**
 
-- The M5 Terraform: the drift Lambda, its schedule, the retrain state machine and
-  the EventBridge rule on registry approval. The retrain ASL exists and its
-  placeholders are substituted by nothing.
 - Audit sampling of confidently auto-approved documents — the single highest-value
   addition, and the fix for both the Q2 blind spot and the retraining bias.
 - An X-Ray annotation on `correlation_id`, without which the runbook's
