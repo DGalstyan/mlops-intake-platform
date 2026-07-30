@@ -30,7 +30,7 @@ in the table below, and what is *unverified* about each is in Known gaps.
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 30-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger (S3 notifications enabled on the bucket), review API. Local simulation produces the two required traces. |
 | **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
 | **M5** Drift + Retraining | **Drift detection working with real evidence; the loop is Terraform-complete but has never run** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Scheduled drift Lambda, retrain state machine that registers and deliberately cannot deploy, and a separate promote state machine startable only by a human's registry approval. |
-| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 367 tests, 6 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
+| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 369 tests, 6 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
 account, because no AWS credentials are configured. So `fmt` and `validate` are
@@ -74,11 +74,17 @@ Nothing here has been deployed.
                                                                                       │
                          ┌────────────────────────────────────────────────────────────┘
                          ▼
-[~]     Step Functions "retrain" state machine  (ASL written; no Terraform)
+[~]     Step Functions "retrain" state machine  (ASL + Terraform written; never run)
           train ──► evaluate vs champion ──► gate ──► Model Registry (PendingManualApproval)
-                                                              │ human approval event
+                                                              │
+                                          [ a human approves in the registry ]
+                                                              │ EventBridge
                                                               ▼
-                                              canary deploy ──► auto-rollback on alarm
+[~]     Step Functions "promote" state machine  (its ONLY caller is that rule)
+          canary deploy ──► auto-rollback on alarm
+
+[~] Scheduled drift Lambda ──► reads data capture, compares to the M1 baseline
+          ──► report to S3 + SNS on breach
 
 [x] Foundations, and the inference endpoint (infra/, Terraform written):
       KMS key (per env) · ECR repo (immutable tags) · 4 S3 buckets
@@ -98,7 +104,7 @@ ASL, or handlers.
 infra/           Terraform. bootstrap/ (state backend) + modules/ + envs/{dev,staging}/
 src/             data generator, training, inference, pipeline handlers, drift math
 schemas/         one JSON Schema per document class (source of truth)
-statemachines/   ASL definitions (intake, retrain)
+statemachines/   ASL definitions (intake, retrain, promote)
 tests/           unit + contract + ASL-validation tests
 evidence/        dashboard shot, rollback proof, drift report, traces, CI runs
 docs/            decisions.md (decision log), runbook.md, ASSIGNMENT.md
@@ -127,7 +133,7 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 367 tests, mypy-strict clean
+make test            # 369 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
@@ -390,6 +396,21 @@ is not measurable in production — only on the frozen golden set, offline, at M
 Everything below is a **proxy**, and the useful question about a proxy is not "what
 does it say" but "what is it blind to".
 
+### Where each required metric actually lives
+
+Four of the metrics the brief names by hand are not emitted under those literal
+names, so grepping for them finds nothing. That is deliberate, and the mapping is:
+
+| Named in the brief | How it is implemented | Why |
+|---|---|---|
+| `ConfidenceP50`, `ConfidenceP10` | one `Confidence` metric, read with CloudWatch's `p50` / `p10` **stats** | emitting raw values and taking percentiles at query time means the same data can be re-sliced to p90 or p99 later. Emitting a pre-computed p10 fixes the question you are allowed to ask |
+| `EndToEndLatencyP95` | `AWS/States` `ExecutionTime` at `p95`, dimensioned by state machine | Step Functions already measures exactly this, correctly, for free. A hand-rolled duplicate would be a second number that can disagree with the first |
+| `AutoApprovalRate`, `HumanOverrideRate`, `SchemaValidationFailureRate` | metric **math** over the raw counters `AutoApproved`, `HumanOverride`, `SchemaValidationFailure` and `DocumentsProcessed` | same reason: a stored rate cannot be re-cut by document class after the fact, and a rate emitted per-document is wrong whenever the denominator is not 1 |
+
+`EstimatedCostPerDocument` is likewise metric math over `LLMInputTokens` /
+`LLMOutputTokens` and the price constants in `config/prices.json`, so a price change
+is a one-line edit rather than a redeploy.
+
 ### The split
 
 | Metric | Measures | Blind to |
@@ -583,7 +604,7 @@ Six milestones of code, none of it deployed. The split is worth stating plainly
 because it is the whole character of this submission:
 
 **Verified, by something other than my own assertion**
-- 367 tests, `mypy --strict` on 44 files, `ruff` clean, `terraform validate` on
+- 369 tests, `mypy --strict` on 44 files, `ruff` clean, `terraform validate` on
   three roots - A **green PR and main run on GitHub Actions** — real CI, which
   caught three bugs local development had masked, including a container that
   could not have started on SageMaker - Six regression tests **proved** to fail

@@ -327,3 +327,71 @@ class TestPrices:
     def test_retrieved_date_is_recorded(self, prices: dict[str, Any]) -> None:
         """A price with no date is a claim with no shelf life."""
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", prices["retrieved"])
+
+
+class TestBriefMetricsAreAllAccountedFor:
+    """The brief names nine metrics by hand. Four are not emitted under those
+    literal names — they are percentile stats or metric math over raw counters —
+    so a reviewer grepping for them finds nothing and reasonably concludes they
+    are missing.
+
+    The README carries the mapping. This asserts the mapping stays true, because
+    the failure it prevents is being marked down for work that was actually done.
+    """
+
+    REQUIRED = (
+        "AutoApprovalRate",
+        "HumanOverrideRate",
+        "ConfidenceP50",
+        "ConfidenceP10",
+        "SchemaValidationFailureRate",
+        "EndToEndLatencyP95",
+        "LLMInputTokens",
+        "LLMOutputTokens",
+        "EstimatedCostPerDocument",
+    )
+
+    # The raw signal each named metric is derived from, and where it comes from.
+    DERIVED_FROM = {
+        "AutoApprovalRate": "AutoApproved",
+        "HumanOverrideRate": "HumanOverride",
+        "ConfidenceP50": "Confidence",
+        "ConfidenceP10": "Confidence",
+        "SchemaValidationFailureRate": "SchemaValidationFailure",
+        "EndToEndLatencyP95": "ExecutionTime",
+        "LLMInputTokens": "LLMInputTokens",
+        "LLMOutputTokens": "LLMOutputTokens",
+        "EstimatedCostPerDocument": "LLMInputTokens",
+    }
+
+    def test_every_named_metric_is_explained_in_the_readme(self) -> None:
+        readme = (
+            Path(__file__).resolve().parents[1] / "README.md"
+        ).read_text(encoding="utf-8")
+        missing = [name for name in self.REQUIRED if name not in readme]
+        assert not missing, (
+            f"the README never mentions {missing}, which the brief names "
+            "explicitly. A reviewer will read that as not built."
+        )
+
+    def test_every_named_metric_resolves_to_something_real(self) -> None:
+        """Each one must trace to a metric the system actually emits, or to a
+        CloudWatch namespace metric it legitimately reuses."""
+        root = Path(__file__).resolve().parents[1]
+        emitted = set()
+        for asl in (root / "statemachines").glob("*.asl.json"):
+            emitted.update(
+                re.findall(r'"MetricName":\s*"([A-Za-z0-9]+)"', asl.read_text("utf-8"))
+            )
+        # Metrics CloudWatch publishes for us rather than ones we emit.
+        vended = {"ExecutionTime"}
+
+        unresolved = [
+            name
+            for name, source in self.DERIVED_FROM.items()
+            if source not in emitted and source not in vended
+        ]
+        assert not unresolved, (
+            f"these named metrics claim to derive from a signal nothing emits: "
+            f"{unresolved}. Emitted: {sorted(emitted)}"
+        )
