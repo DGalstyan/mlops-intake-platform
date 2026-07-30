@@ -12,6 +12,7 @@ $(error ENV must be "dev" or "staging", got "$(ENV)")
 endif
 
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
+        measure-throughput docker-build docker-smoke resolve-approved smoke-test \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -158,3 +159,35 @@ two-versions: venv data
 	$(PY) -m src.training.evaluate --model-dir $(ARTIFACTS_DIR)/v2/model \
 		--data-dir $(DATA_DIR) --output-dir $(ARTIFACTS_DIR)/v2/evaluation \
 		--champion-metrics $(ARTIFACTS_DIR)/v1/evaluation/metrics.json
+
+# --- M2 deployment ---------------------------------------------------------
+ENDPOINT_NAME ?= intake-classifier-$(ENV)
+MODEL_PACKAGE_GROUP ?= intake-classifier-$(ENV)
+
+# Load measurement that justifies the autoscaling target and latency alarm.
+# Needs no AWS.
+measure-throughput: venv
+	$(PY) scripts/measure_throughput.py --requests 1200 --warmup 100 \
+		--output evidence/m2/throughput.json
+
+# Build the inference image. Tagged by content digest, not "latest": the digest is
+# what gets recorded as model lineage, and a mutable tag would make that lineage a
+# lie. ECR has immutable tags enabled, so a re-push under an existing tag fails.
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+docker-build:
+	docker build -f src/inference/Dockerfile -t intake-inference:$(IMAGE_TAG) .
+
+# Verify the container's own /ping and /invocations contract before it ever
+# reaches SageMaker.
+docker-smoke: docker-build
+	./scripts/container_smoke.sh intake-inference:$(IMAGE_TAG)
+
+# Resolve the version to deploy. Refuses anything not Approved — approval is the
+# human gate the release design is built around.
+resolve-approved: venv
+	$(PY) scripts/resolve_approved_model.py --model-package-group $(MODEL_PACKAGE_GROUP) --region $(REGION)
+
+# Post-deploy release gate. Non-zero exit means reject the release.
+smoke-test: venv
+	$(PY) scripts/smoke_test.py --endpoint-name $(ENDPOINT_NAME) --region $(REGION) \
+		--require-confidence-spread

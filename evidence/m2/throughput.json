@@ -1,0 +1,21 @@
+{
+  "requests": 1200,
+  "batch_size": 1,
+  "documents_per_request": 1,
+  "wall_seconds": 110.943,
+  "latency_ms": {
+    "mean": 92.44,
+    "p50": 86.632,
+    "p95": 165.917,
+    "p99": 219.544,
+    "max": 343.087
+  },
+  "measured_requests_per_second": 10.8,
+  "measured_invocations_per_minute": 649,
+  "derating_factor": 0.35,
+  "estimated_instance_invocations_per_minute": 227,
+  "scaling_headroom_factor": 0.6,
+  "recommended_autoscaling_target": 150,
+  "latency_alarm_p99_multiplier": 7,
+  "recommended_latency_alarm_ms": 1500
+}

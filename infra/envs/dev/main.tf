@@ -25,6 +25,10 @@ module "stack" {
 
   kms_key_admin_principal_arns = var.kms_key_admin_principal_arns
 
+  deploy_endpoint        = var.deploy_endpoint
+  model_package_arn      = var.model_package_arn
+  endpoint_instance_type = var.endpoint_instance_type
+
   raw_expiration_days               = var.raw_expiration_days
   processed_transition_days         = var.processed_transition_days
   artifacts_transition_ia_days      = var.artifacts_transition_ia_days

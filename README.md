@@ -24,7 +24,7 @@ been written yet, and no AWS resource has ever been applied from this repo.
 |---|---|---|
 | **M0** Foundations (IaC) | **Code complete, never applied** | `infra/` — state backend, KMS, ECR, 4 buckets, per-component IAM. `terraform validate` + `fmt` clean on all three roots. |
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
-| M2 Deployment | Not started | — |
+| **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
 | M3 Orchestration + HITL | Not started | — |
 | M4 Observability | Not started | — |
 | M5 Drift + Retraining | Not started | — |
@@ -275,7 +275,7 @@ actually goes:
 | Milestone | Driver | Notes |
 |---|---|---|
 | M1 | SageMaker Training + Processing jobs | Billed per second of instance time. Minutes per run on a small instance. |
-| M2 | SageMaker inference endpoint | **The dominant cost.** A real-time `ml.m5.large` is ~$0.115/hr, so ~$2.76/day left running. Serverless Inference is the cheaper choice for a graded run that idles most of the time — at the price of cold starts and losing some monitoring surface. This decision gets made and recorded at M2. |
+| M2 | SageMaker inference endpoint | **The dominant cost, and now decided.** Real-time `ml.t3.medium` at ~$0.05/hr — ~$1.20/day if left running, and briefly double that during a canary while both fleets are alive. Serverless was rejected: it cannot do data capture, autoscaling, or canary rollback, which are the inputs to M5 and the whole of M2. `deploy_endpoint` defaults to **false**, `max_capacity = 2` caps scale-out, and `make destroy` removes it. |
 | M3 | Textract, Bedrock | Textract `DetectDocumentText` ~$1.50/1k pages. Bedrock is per-token and model-dependent; the constant gets pinned when the model is chosen. |
 | M4 | CloudWatch custom metrics, dashboards | Per-metric monthly + dashboard fee. Small but not free at ~12 custom metrics. |
 | M5 | Scheduled drift Processing job | Per-second instance time, once per schedule tick. |
@@ -337,6 +337,30 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M2 specifically**
+
+- **The headline deliverable does not exist.** M2 is graded on "a recorded bad
+  deploy that rolled back on its own". No endpoint has been deployed, so there is
+  no rollback recording. The canary policy and both rollback alarms are written and
+  validated in Terraform; whether they actually fire is **unproven**.
+- **The container image has never been built.** `docker build` was attempted and
+  hung on this machine — the daemon became unresponsive and the build was
+  abandoned rather than retried indefinitely. The `/ping` and `/invocations`
+  contract *is* verified, by 41 tests against the Flask app directly, including
+  readiness returning 503 when the model loads but cannot predict. What is
+  unverified is the image: base image resolution, the dependency install inside it,
+  and whether gunicorn starts under `serve`. `scripts/container_smoke.sh` exists to
+  check exactly that and has never run.
+- **The autoscaling target is derived from a sequential, in-process measurement on
+  faster hardware than the target instance.** It is an upper bound on capacity with
+  a guessed 0.35 derating factor. A real concurrent load test may disagree.
+- **The latency alarm threshold (1500 ms) is 7× an in-process p99** that excludes
+  HTTP framing and SageMaker overhead. The real p99 will be higher, making the
+  effective multiple smaller than intended.
+- **`termination_wait_in_seconds = 600`** keeps the old fleet alive after a shift,
+  which is what makes rollback instant — but it also means a deploy holds double
+  capacity for 10 minutes. That is a cost/safety trade I have not measured.
 
 **M1 specifically**
 

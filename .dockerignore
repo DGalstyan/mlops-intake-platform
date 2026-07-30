@@ -1,0 +1,30 @@
+# Keep the build context small and the image digest stable. Anything that varies
+# between machines but does not affect the image must be excluded, or the digest
+# changes for identical source — which would break using the digest as lineage.
+.git
+.github
+.venv
+venv
+.idea
+.vscode
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+**/__pycache__
+*.pyc
+.DS_Store
+
+# Generated, not source. Regenerated deterministically by `make data`.
+/data
+/artifacts
+evidence
+
+# Not needed to serve a model.
+infra
+statemachines
+tasks
+docs
+tests
+Makefile
+*.md

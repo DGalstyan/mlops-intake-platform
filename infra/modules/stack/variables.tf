@@ -71,3 +71,84 @@ variable "data_capture_expiration_days" {
   type        = number
   default     = 60
 }
+
+# --- Endpoint (M2) ---------------------------------------------------------
+# Off by default: the endpoint is the only resource here with a standing hourly
+# cost, and it cannot exist before an Approved registry version does.
+
+variable "deploy_endpoint" {
+  description = "Whether to create the inference endpoint. Requires model_package_arn."
+  type        = bool
+  default     = false
+}
+
+variable "model_package_arn" {
+  description = "Approved SageMaker model package version to deploy. Resolve it with scripts/resolve_approved_model.py, which refuses non-Approved versions. Ignored when deploy_endpoint is false."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.model_package_arn == "" || can(regex("^arn:aws:sagemaker:", var.model_package_arn))
+    error_message = "model_package_arn must be empty or a SageMaker ARN."
+  }
+}
+
+variable "endpoint_instance_type" {
+  description = "Real-time inference instance type."
+  type        = string
+  default     = "ml.t3.medium"
+}
+
+variable "endpoint_initial_instance_count" {
+  description = "Instance count at deploy time; also the autoscaling floor."
+  type        = number
+  default     = 1
+}
+
+variable "endpoint_data_capture_sampling_percentage" {
+  description = "Percentage of requests captured. 100 in dev — M5's drift job needs a complete picture."
+  type        = number
+  default     = 100
+}
+
+variable "endpoint_autoscaling_max_instances" {
+  description = "Scale-out ceiling, and therefore the cost ceiling."
+  type        = number
+  default     = 2
+}
+
+variable "endpoint_autoscaling_target_invocations" {
+  description = "Target SageMakerVariantInvocationsPerInstance (per minute). Measured, not guessed: ~227/min per-instance capacity derated from scripts/measure_throughput.py, times 60% headroom. See evidence/m2/throughput.json."
+  type        = number
+  default     = 150
+}
+
+variable "endpoint_canary_traffic_percentage" {
+  description = "Traffic share sent to the new variant in the first canary step."
+  type        = number
+  default     = 10
+}
+
+variable "endpoint_canary_bake_time_minutes" {
+  description = "How long the canary step is held while rollback alarms are watched. Must exceed the alarm evaluation window."
+  type        = number
+  default     = 5
+}
+
+variable "endpoint_rollback_5xx_threshold" {
+  description = "5xx count per minute that trips rollback. Low, because a canary serves little traffic."
+  type        = number
+  default     = 1
+}
+
+variable "endpoint_rollback_latency_threshold_ms" {
+  description = "p99 ModelLatency ceiling in ms that trips rollback. 7x the measured in-process p99 of ~220ms — loose enough not to fire on jitter, tight enough to catch an unusably slow variant."
+  type        = number
+  default     = 1500
+}
+
+variable "alarm_sns_topic_arns" {
+  description = "SNS topics notified by the rollback alarms. M4 owns the topic; empty means alarms still roll back but notify nobody."
+  type        = list(string)
+  default     = []
+}

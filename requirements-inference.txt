@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Serving layer only. Kept separate from requirements.txt so the training
+# container does not install a web server it never runs, and so the inference
+# image's dependency surface is exactly what serving needs.
+flask==3.0.3
+gunicorn==23.0.0

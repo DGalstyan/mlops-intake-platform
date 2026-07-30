@@ -514,3 +514,172 @@ evidence.
 **I'd flip this if:** install time on cold container starts became the bottleneck,
 at which point the pins move into a custom image built in CI and referenced by
 digest — which is what M2 does for inference anyway.
+
+---
+
+# Decision log — M2 (Deployment)
+
+## Real-time endpoint, not Serverless Inference
+
+**Chose:** a real-time endpoint on `ml.t3.medium` with `deploy_endpoint` defaulting
+to false so it is never created by accident.
+
+**Over:** SageMaker Serverless Inference, which the assignment explicitly
+encourages on cost grounds and which would genuinely be cheaper for a mostly-idle
+graded run.
+
+**Because:** serverless cannot satisfy three separate M2 requirements at once, and
+each loss lands on a different graded milestone:
+
+1. **Data capture is not supported on serverless endpoints.** M5's drift detection
+   reads data-capture files as its only source of production traffic. Choosing
+   serverless deletes the input to a 20%-weighted milestone.
+2. **Application Auto Scaling does not apply.** Serverless scales on its own
+   concurrency model, so "autoscaling on a justified metric, with a documented
+   reason for the target value" has nothing to configure and nothing to justify.
+3. **Blue/green deployment guardrails are real-time only.** Canary traffic shifting
+   with alarm-driven automatic rollback is M2's headline deliverable and simply
+   does not exist for serverless endpoints.
+
+Cold starts, the usual argument against serverless, are not the reason. They would
+be manageable — the model loads in well under a second. The disqualifier is that
+serverless silently removes the observability and release-safety surface that 40%
+of the grade sits on.
+
+**Cost is mitigated, not ignored:** the smallest viable instance
+(~$0.05/hour), `max_capacity = 2` as a hard cost ceiling, `deploy_endpoint = false`
+by default, and `make destroy`. The standing hourly charge is in the README cost
+table.
+
+**I'd flip this if:** the workload were genuinely spiky with long idle periods *and*
+drift monitoring could be fed from the pipeline's own results store rather than
+endpoint data capture. That second condition is the real dependency, and it is a
+design change, not a config change.
+
+## The autoscaling target is measured, and the first guess was 4x wrong
+
+**Chose:** target-track `SageMakerVariantInvocationsPerInstance` at **150
+invocations/minute per instance**.
+
+**Over:** (a) a CPU-utilisation target, the common default; (b) the value I first
+wrote, 900, which was a guess.
+
+**Because:** CPU utilisation on a sparse dot product barely moves under load — the
+endpoint queues before it saturates a core — so a CPU-based policy scales far too
+late or never. Invocations-per-instance is the signal that actually correlates with
+queueing for this model.
+
+The number itself comes from `scripts/measure_throughput.py`: ~650
+invocations/minute measured against the real handler path, derated by 0.35 for an
+`ml.t3.medium`'s two burstable vCPUs (~227/min of real capacity), times 0.60
+headroom. The headroom exists because target tracking is a *steady-state* signal
+and bringing an instance into service takes minutes; a target set at capacity
+guarantees the endpoint is already queueing before help arrives.
+
+**The measurement corrected me.** My initial default of 900 is roughly **4x** real
+per-instance capacity — the policy would effectively never have scaled out, and
+"autoscaling on a justified metric" would have been decorative. Same story for the
+latency alarm: I guessed 2000 ms before measuring a p99 of 220 ms, and settled on
+1500 ms as 7x measured p99. Numbers and caveats in `evidence/m2/throughput.json`
+and `evidence/m2/throughput.md`.
+
+**I'd flip this if:** a real concurrent load test against a deployed endpoint
+disagreed — which it may well, since the measurement is sequential, in-process, and
+on faster hardware than a t3.medium. It is an upper bound on capacity, and the
+derating factor is the guess that remains.
+
+## Malformed input returns 4xx, and that is a release-safety decision
+
+**Chose:** the serving layer maps client errors (bad JSON, wrong content type,
+oversized payload, empty document) to **4xx**, and only genuine internal failures to
+**5xx**.
+
+**Over:** the simpler "any exception is a 500".
+
+**Because:** the endpoint's `ModelInvocation5XXErrors` alarm drives the automatic
+rollback. If a malformed request produced a 5xx, anyone posting bad JSON at a
+deployment could roll back a perfectly healthy version — and worse, the rollback
+would look justified in the alarm history. The status-code mapping is therefore not
+an HTTP-hygiene preference; it decides whether the rollback guardrail is
+trustworthy. There is a test asserting it, and the container smoke script checks it
+again against the running image.
+
+**I'd flip this if:** never, for this design. If the alarm moved to a metric that
+excluded client errors, the mapping would still be right for every other reason.
+
+## Readiness means "can predict", not "process started"
+
+**Chose:** `/ping` returns 200 only after the model has loaded **and** successfully
+scored a canary document. Failures are captured and reported through `/ping` rather
+than crashing the container.
+
+**Over:** returning 200 as soon as the process is up, or as soon as the artifact
+deserialises.
+
+**Because:** during a canary deployment, a container that reports ready before it
+can actually serve receives traffic, fails every request — and that failure is
+attributed to the *new* variant looking healthy long enough to proceed. An artifact
+can deserialise and still fail every call (version-mismatched pickle, empty
+vectoriser vocabulary), so a load-only check is the dangerous variant. Readiness
+that does not exercise the model is worse than no readiness check, because it is
+trusted.
+
+Capturing the failure instead of exiting is deliberate too: a container that exits
+at startup gives SageMaker nothing to query and produces a generic "container
+failed", whereas one that starts and reports *why* it is unhealthy is diagnosable
+from CloudWatch without reproducing it.
+
+**I'd flip this if:** the readiness probe's own cost became significant — a model
+with a multi-second first inference would make every instance replacement slower,
+and the probe would need to move to a cheaper invariant.
+
+## Approved-only deployment is enforced in a script, not a Terraform data source
+
+**Chose:** `scripts/resolve_approved_model.py` resolves the latest **Approved**
+version and exits non-zero, naming the statuses it found, if there is none. Its
+output is passed to Terraform as an explicit `model_package_arn`.
+
+**Over:** a `data "aws_sagemaker_model_package"` lookup inside Terraform that
+re-resolved "latest approved" on every plan.
+
+**Because:** with an in-Terraform lookup, the deployed version becomes an
+invisible moving input — someone approves a version in the console and the next
+unrelated `terraform apply` silently ships it. Passing the ARN explicitly means a
+version change appears as a diff in the plan, which is what makes a release a
+decision rather than a side effect. The refusal is loud for the same reason: a
+resolver that returned nothing would let the deploy proceed with an empty variable
+and fail confusingly later.
+
+**I'd flip this if:** the deploy were driven by the EventBridge approval event
+(which M5 wires up), where the approved version ARN arrives *in* the event payload.
+That is still explicit — the value comes from the approval itself rather than from
+a re-query.
+
+## Custom container over a managed framework image
+
+**Chose:** build our own image (`src/inference/Dockerfile`) implementing `/ping` and
+`/invocations` with Flask + gunicorn.
+
+**Over:** a managed SageMaker scikit-learn container plus an `inference.py`, which
+is less code and explicitly permitted by the assignment.
+
+**Because:** the managed images pin their own scikit-learn version, and a model
+artifact must be unpickled by the version that wrote it. Using a managed image
+would make the version pinning in `requirements.txt` a fiction — training and
+serving could silently diverge, and the failure mode is a subtly wrong
+deserialisation rather than a clean error. Owning the image makes training and
+serving scikit-learn provably identical, and it gives M6 a container to build and
+push by digest.
+
+The cost is more code to own: a serving layer, a Dockerfile, and a local contract
+script. That is why the handlers are kept free of HTTP concerns — they stay
+testable without the container, which is what let the contract be verified while
+the image build itself was blocked.
+
+**I'd flip this if:** the model gained heavyweight framework dependencies (torch,
+transformers) where the managed image's tested CUDA/driver combination is worth far
+more than version symmetry.
+
+**Not verified:** the image has never been built. `docker build` hung on this
+machine and the daemon became unresponsive; the build was abandoned rather than
+retried indefinitely. See the README's known gaps.

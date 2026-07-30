@@ -71,3 +71,25 @@ output "ci_deploy_role_arn" {
   description = "GitHub Actions assumes this via OIDC (role-to-assume in the workflow's permissions: id-token: write step). Scoped to this environment only."
   value       = module.ci_deploy_role.role_arn
 }
+
+# --- Endpoint (M2). Null when deploy_endpoint is false. --------------------
+
+output "endpoint_name" {
+  description = "Real-time inference endpoint name, or null when the endpoint is not deployed. Consumed by the smoke test and by M3's Classify state."
+  value       = one(module.endpoint[*].endpoint_name)
+}
+
+output "endpoint_arn" {
+  description = "Endpoint ARN, or null. M3 scopes sagemaker:InvokeEndpoint to this."
+  value       = one(module.endpoint[*].endpoint_arn)
+}
+
+output "endpoint_data_capture_s3_uri" {
+  description = "Where data-capture records land — the M5 drift job's input path."
+  value       = one(module.endpoint[*].data_capture_s3_uri)
+}
+
+output "endpoint_rollback_alarm_names" {
+  description = "Alarms wired into the endpoint's auto_rollback_configuration."
+  value       = try(module.endpoint[0].rollback_alarm_names, [])
+}
