@@ -105,9 +105,9 @@ account on the planet, not just within this account — every other resource
 in this stack (IAM roles, the KMS alias, the ECR repo) is scoped to this
 account, so the plain convention name is guaranteed collision-free there,
 but for S3 specifically it is not. Appending the account id (available
-without a secret, via `data.aws_caller_identity`) guarantees `terraform
-apply` succeeds on any clean account without a human picking a unique
-suffix by hand, which is the M0 deliverable's "no manual step" bar.
+without a secret, via `data.aws_caller_identity`) guarantees `terraform apply`
+succeeds on any clean account without a human picking a unique suffix by hand.
+That is the M0 deliverable's "no manual step" bar.
 
 **I'd flip this if:** this project needed cosmetically clean bucket names for
 some customer-facing reason (e.g. a public data-sharing URL) — not the case
@@ -135,8 +135,8 @@ resources means every grant can name a real ARN.
 **I'd flip this if:** the CI pipeline needed to create genuinely unpredictable
 resource names (e.g. Terraform-generated random suffixes), where no ARN pattern
 can be written ahead of time. Then I would scope by resource *tag* condition
-(`aws:RequestTag/project = intake`) instead of by ARN, which is the same
-principle with a different key.
+(`aws:RequestTag/project = intake`) instead of by ARN — the same principle with
+a different key.
 
 **Consequence, stated honestly:** as of M0 this role cannot run `terraform
 apply` for the stack's resources at all. M6 closes that. Until then the deploy
@@ -278,7 +278,7 @@ or constructing the ARN as a string.
 
 **Over:** (a) unconditionally creating it; (b) constructing
 `arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com` by
-string interpolation, which is deterministic and needs no lookup.
+string interpolation. That form is deterministic and needs no lookup.
 
 **Because:** there is exactly one OIDC provider per account per issuer URL. Any
 reviewer whose sandbox already federates GitHub Actions gets
@@ -304,8 +304,8 @@ origin.
 three places — the bootstrap root, the stack module, and the Makefile — from
 the same two inputs.
 
-**Over:** reading it from the bootstrap root's `terraform output`, which is what
-an earlier revision of the Makefile did.
+**Over:** reading it from the bootstrap root's `terraform output`. An earlier
+revision of the Makefile did exactly that.
 
 **Because:** the bootstrap root keeps **local** state, and `*.tfstate` is
 gitignored. So `terraform output -raw state_bucket_name` only works on the one
@@ -357,9 +357,9 @@ char-length and token-count distributions (quantiles **plus fixed histogram
 edges**), a confidence histogram, per-feature TF-IDF means and variances for the
 top 200 features, and training vocabulary size. It carries no F1 and no accuracy.
 
-**Over:** (a) storing the evaluation metrics in the same file, which is the
-obvious convenience; (b) storing only summary statistics without histogram edges;
-(c) storing all 20,000 feature moments.
+**Over:** (a) storing the evaluation metrics in the same file, the obvious
+convenience; (b) storing only summary statistics without histogram edges; (c)
+storing all 20,000 feature moments.
 
 **Because:** drift is a change in a *distribution*, so a baseline holding scalars
 supports no drift test at all. Each element earns its place against a specific
@@ -567,8 +567,8 @@ design change, not a config change.
 **Chose:** target-track `SageMakerVariantInvocationsPerInstance` at **150
 invocations/minute per instance**.
 
-**Over:** (a) a CPU-utilisation target, the common default; (b) the value I first
-wrote, 900, which was a guess.
+**Over:** (a) a CPU-utilisation target, the common default; (b) 900, the value I
+first wrote, and a guess.
 
 **Because:** CPU utilisation on a sparse dot product barely moves under load — the
 endpoint queues before it saturates a core — so a CPU-based policy scales far too
@@ -666,8 +666,8 @@ a re-query.
 **Chose:** build our own image (`src/inference/Dockerfile`) implementing `/ping` and
 `/invocations` with Flask + gunicorn.
 
-**Over:** a managed SageMaker scikit-learn container plus an `inference.py`, which
-is less code and explicitly permitted by the assignment.
+**Over:** a managed SageMaker scikit-learn container plus an `inference.py`.
+That is less code, and the assignment explicitly permits it.
 
 **Because:** the managed images pin their own scikit-learn version, and a model
 artifact must be unpickled by the version that wrote it. Using a managed image
@@ -763,8 +763,8 @@ generation, not just the object version.
 **Chose:** a `Prepare` state that seeds empty `ocr` and `classification` objects
 before anything can fail.
 
-**Over:** letting the dead-letter state read those paths directly, which is what the
-first revision did.
+**Over:** letting the dead-letter state read those paths directly. The first
+revision did.
 
 **Because:** JSONPath references to absent fields fail the state. So a failure during
 OCR would have failed the dead-letter write *too* — losing the document at exactly
@@ -781,8 +781,7 @@ evaluates to nothing rather than erroring.
 **Chose:** Bedrock failure after all retries routes to `ExtractionUnavailable` and
 then into the human-review queue with an empty field set and the reason.
 
-**Over:** dead-lettering the document, which is what every other terminal failure
-does.
+**Over:** dead-lettering the document, the way every other terminal failure ends.
 
 **Because:** classification already succeeded, so there is a usable partial result
 and a human can supply the fields by reading the document. Discarding it would throw
@@ -799,8 +798,8 @@ point the right answer is a retry queue, not a dead letter.
 **Chose:** the API takes `correlation_id` and looks the task token up from the review
 table.
 
-**Over:** accepting the token in the request body, which is simpler and is what the
-task-token examples usually show.
+**Over:** accepting the token in the request body. That is simpler, and it is
+how the task-token examples usually show it.
 
 **Because:** a task token is a capability. Whoever holds one can resume that execution
 with arbitrary output — including a corrected class that becomes a training label.
@@ -834,8 +833,8 @@ a human had already fixed. Both orderings have tests.
 **Chose:** implement the subset of Draft 2020-12 these four schemas use, and raise
 `NotImplementedError` on any keyword outside that subset.
 
-**Over:** (a) adding the `jsonschema` package to the Lambda bundle; (b) implementing
-the subset and ignoring unknown keywords, which is the usual shortcut.
+**Over:** (a) adding the `jsonschema` package to the Lambda bundle; (b)
+implementing the subset and ignoring unknown keywords, the usual shortcut.
 
 **Because:** the subset is small and fully enumerated, and the schemas are ours. But
 option (b) is genuinely dangerous: a validator that silently skips a keyword it does
@@ -922,8 +921,8 @@ dimension contains "correlation".
 **Chose:** every alarm carries a `measures` tag — "model quality (primary proxy)",
 "system health", "cost", "data safety" — and the generated inventory reads that tag.
 
-**Over:** inferring the classification from keywords in the alarm description, which
-is what the first version did.
+**Over:** inferring the classification from keywords in the alarm description.
+The first version did.
 
 **Because:** it miscategorised two alarms immediately. `execution_failures` came out as
 "data safety" because its description mentions the dead-letter queue. The
@@ -984,7 +983,7 @@ correct answer for a real system and overkill here.
 its success path, so a CloudWatch throttle cannot turn a stored document into a failed
 one.
 
-**Over:** letting a metric failure propagate, which is what happens by default.
+**Over:** letting a metric failure propagate, the default behaviour.
 
 **Because:** every emit state runs *after* the document's outcome is durably written.
 A gap in a graph is recoverable; a document that failed because its metric could not be
@@ -1049,8 +1048,8 @@ upgrade if input drift ever needs to detect within-bin shifts.
 **golden set**, while every other distribution in the same artifact comes from the
 training split. The artifact records `confidence_source` so a reader can tell which.
 
-**Over:** computing everything on the training split, which is what M1 originally did
-and is the consistent-looking choice.
+**Over:** computing everything on the training split. M1 originally did, and it
+looks like the consistent choice.
 
 **Because:** a model is systematically more confident on documents it memorised. On
 this corpus the gap is p10 **0.865 on train vs 0.731 held out** — so comparing
@@ -1077,8 +1076,8 @@ works, but its confidence comparison is against an inflated reference — which 
 changed", and only the concept proxies (override rate, confidence decay) as "model
 decayed". A shifted class mix on its own produces `DATA_CHANGED`.
 
-**Over:** treating a shifted prediction distribution as evidence of model degradation,
-which is how it is often used.
+**Over:** treating a shifted prediction distribution as evidence of model
+degradation, the way it is often used.
 
 **Because:** if the input mix changed, the prediction mix *should* follow — that is the
 model working, not failing. A customer who starts sending more invoices and fewer
@@ -1094,12 +1093,12 @@ signal. That needs input segmentation this does not have.
 
 **Chose:** a Lambda on an EventBridge schedule.
 
-**Over:** a SageMaker Processing job, which is what the milestone brief suggests first.
+**Over:** a SageMaker Processing job, the milestone brief's first suggestion.
 
 **Because:** the computation is histogram arithmetic over a bounded window — a few
 hundred kilobytes of counts. A Processing job would spend more on container startup
-than on the work, and its only real advantage is arbitrary scale, which is not needed
-until a window exceeds Lambda's memory.
+than on the work, and its only real advantage is arbitrary scale, and that does
+not matter until a window exceeds Lambda's memory.
 
 **I'd flip this at a stated threshold:** when a single window no longer fits in Lambda
 memory, or when drift needs embedding-based distances (which means loading a model and
@@ -1196,8 +1195,7 @@ far the opposite is true — every bug CI has caught came from a credential-free
 (`docker run IMAGE serve`) and checks `/ping`, `/invocations`, the correlation-id
 echo, the 4xx-not-5xx mapping, and 503-with-no-model.
 
-**Over:** building the image and calling that verification, which is what most
-pipelines do.
+**Over:** building the image and calling that verification, as most pipelines do.
 
 **Because:** it immediately caught a bug that a build alone never would.
 `ENTRYPOINT ["gunicorn"]` with the arguments in CMD looks correct; but a command
@@ -1259,7 +1257,7 @@ workflow, where cancelling a superseded run is free.
 **Chose:** `sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g'` over the plan before posting, and
 truncation to 60k characters.
 
-**Over:** posting the plan verbatim, which is what the common recipes do.
+**Over:** posting the plan verbatim, as the common recipes do.
 
 **Because:** this repo is **public**. A Terraform plan routinely contains account ids
 and full ARNs, and a PR comment is world-readable and permanent — it survives the
@@ -1281,7 +1279,8 @@ the repo — test count, alarm count, custom-metric count, that every milestone 
 known-gaps subsection, that all seven discussion answers exist, that each evidence
 folder carries its own caveat.
 
-**Over:** proof-reading before submission, which is what everyone intends to do.
+**Over:** proof-reading before submission, which everyone intends to do and
+nobody finishes.
 
 **Because:** the same failure happened four times here. Three separate hardcoded
 wildcard counts went stale; the README claimed "only M0 is implemented" two milestones
@@ -1304,7 +1303,7 @@ caught elsewhere: a skipped test is green in every report and catches nothing.
 **Chose:** `evidence/README.md` opens with a table whose most prominent column is
 status — "absent", "local simulation", "real" — and each folder repeats its own caveat.
 
-**Over:** an index listing what is present, which is the natural way to write it.
+**Over:** an index listing what is present, the natural way to write one.
 
 **Because:** a reader lands in one folder without reading the index, and evidence that
 does not say what it is not will be over-read. Two of these artifacts are honest local
@@ -1375,7 +1374,7 @@ merging the workflows.
 **Chose:** `CheckApprovalStatus` is the first state, and it re-reads
 `$.detail.ModelApprovalStatus` even though the EventBridge rule already filtered on it.
 
-**Over:** trusting the trigger, which is what the rule is for.
+**Over:** trusting the trigger. Filtering is what the rule is for.
 
 **Because:** the rule is one `terraform apply` away from being wider than it looks, and
 the usual way that happens is someone loosening the pattern to debug why the rule is

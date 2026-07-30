@@ -46,7 +46,8 @@ them are a substitute for a run against AWS.
 **Prepared answers to the seven live-discussion questions** are in
 [`docs/discussion.md`](./docs/discussion.md), including the two where the honest
 answer is "this design would not catch that". The evidence index — what exists, what
-is a local substitute, and what is absent — is [`evidence/README.md`](./evidence/README.md).
+is a local substitute, and what is absent — is
+[`evidence/README.md`](./evidence/README.md).
 
 The per-milestone plan of record is in [`tasks/`](./tasks/), with an audit of M0
 against the grading rubric recorded in
@@ -228,11 +229,12 @@ system-health discussion is in the Observability section below.
 ### Calibration is a correctness property here, not a tuning detail
 
 The two registry versions make the point better than prose: v2 (calibration
-disabled) is **more accurate** than v1 — macro-F1 0.9543 vs 0.9417 — while its
-ECE is **19× worse**, 0.2622 vs 0.0140. Since the Route state gates auto-approval
-on `max(predict_proba)`, v2 would confidently auto-approve documents it should
-have escalated, while winning on every accuracy-shaped metric. Choosing v2 on
-macro-F1 alone is exactly the mistake this pair exists to expose.
+disabled) is **more accurate** than v1 on macro-F1, 0.9543 vs 0.9417, while its
+ECE is **19× worse**, 0.2622 vs 0.0140. Since the Route state gates
+auto-approval on `max(predict_proba)`, v2 would confidently auto-approve
+documents it should have escalated, while winning on every accuracy-shaped
+metric. Choosing v2 on macro-F1 alone is exactly the mistake this pair exists to
+expose.
 
 ### What is in the baseline statistics artifact, and why
 
@@ -297,10 +299,11 @@ human review — which only covers the low-confidence slice. You can make the mo
 "drift score" maps these opposite situations onto the same number and prescribes the
 same action for both.
 
-`evidence/m5/` demonstrates this with real numbers: the deliberately shifted batch
-produces PSI **19.8** on document length — roughly 79× the significant-shift
-threshold — while the class mix is unchanged (0.0001) and confidence *rises* 35%. The
-verdict is `DATA_CHANGED` and the retrain trigger stays off.
+`evidence/m5/` demonstrates this with real numbers: the deliberately shifted
+batch produces PSI **19.8** on document length, roughly 79× the
+significant-shift threshold, while the class mix is unchanged (0.0001) and
+confidence *rises* 35%. The verdict is `DATA_CHANGED` and the retrain trigger
+stays off.
 
 ### The retrain gate, and why a human is in it
 
@@ -476,19 +479,20 @@ asserting it never becomes a dimension.
 
 ### Alarms
 
-11 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
-— generated from the Terraform by `make alarm-inventory`, with a test asserting the
-committed file matches a fresh render. Each carries what breaks, the first response,
-and a runbook link in its own description, because an alarm that fires at 3am without
-saying what to do has failed at the only moment it matters.
+11 alarms, inventoried in
+[`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md) — generated
+from the Terraform by `make alarm-inventory`, with a test asserting the
+committed file matches a fresh render. Each carries what breaks, the first
+response, and a runbook link in its own description, because an alarm that fires
+at 3am without saying what to do has failed at the only moment it matters.
 
 **Who is paged: nobody, yet.** Every alarm publishes to one SNS topic with no
 subscriber by default. `alarm_email` adds an address, but a real rotation needs an
 on-call tool and an escalation policy. Inventing a paging story this repo does not
 implement would be worse than saying so. The split that *would* matter: the
-model-quality alarms are not wake-someone-up events — they need a human with the
-corrections table and a day to think — while the pipeline-health and dead-letter
-alarms are.
+model-quality alarms are not wake-someone-up events. They need a human with the
+corrections table and a day to think. The pipeline-health and dead-letter alarms
+are.
 
 ## Cost
 
@@ -580,12 +584,13 @@ Six milestones of code, none of it deployed. The split is worth stating plainly
 because it is the whole character of this submission:
 
 **Verified, by something other than my own assertion**
-- 367 tests, `mypy --strict` on 44 files, `ruff` clean, `terraform validate` on three roots
-- A **green PR and main run on GitHub Actions** — real CI, which caught three bugs local
-  development had masked, including a container that could not have started on SageMaker
-- Six regression tests **proved** to fail on the regressions they target
-- Real drift math against the real baseline, producing the three-verdict evidence
-- A real load measurement that corrected two of my own guessed thresholds
+- 367 tests, `mypy --strict` on 44 files, `ruff` clean, `terraform validate` on
+  three roots - A **green PR and main run on GitHub Actions** — real CI, which
+  caught three bugs local development had masked, including a container that
+  could not have started on SageMaker - Six regression tests **proved** to fail
+  on the regressions they target - Real drift math against the real baseline,
+  producing the three-verdict evidence - A real load measurement that corrected
+  two of my own guessed thresholds
 
 **Written and validated, but never executed**
 - Every Terraform resource. `plan`, `apply` and `destroy` have never run.
@@ -633,25 +638,25 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   retrain state machine is written and its safety properties are tested — registration
   is always `PendingManualApproval`, and no endpoint API appears anywhere in the
   definition — but it has **never executed**.
-- **The promotion path has never run.** It is now written — the promote state machine,
-  the approval rule, and the canary with auto-rollback — and its safety properties are
-  tested from both ends: the ASL re-checks the approval status rather than trusting its
-  trigger, and exactly one IAM statement in the module can start it. But nothing has
-  been applied, so "a human approves and a canary deploys" is a tested claim about
-  configuration, not an observed one.
-- **The drift reports are real, but the input is not production data.** The math runs
-  against the actual M1 baseline and actual generated batches — no stubs — but the
-  windows are locally-scored documents, not SageMaker data capture.
-  `parse_capture_record` handles the capture envelope and is tested, but has never
-  seen a real capture file.
-- **Audit sampling is not implemented.** Routing a random slice of confidently
-  auto-approved documents to review is the only mechanism that would put
-  confidently-wrong documents into the feedback loop. Its absence is the largest
-  substantive gap in the drift design, not just an unbuilt feature — see the
-  sampling-bias section.
-- **`ks_statistic` is tested but unused by the report.** It was removed from the input
-  family after it produced false positives against a histogram-reconstructed baseline.
-  It is kept for the case where both sides have real samples.
+- **The promotion path has never run.** It is now written: the promote state
+  machine, the approval rule, and the canary with auto-rollback. Its safety
+  properties are tested from both ends. The ASL re-checks the approval status
+  rather than trusting its trigger, and exactly one IAM statement in the module
+  can start it. But nothing has been applied, so "a human approves and a canary
+  deploys" is a tested claim about configuration, not an observed one. - **The
+  drift reports are real, but the input is not production data.** The math runs
+  against the actual M1 baseline and actual generated batches, with no stubs
+  anywhere, but the windows are locally-scored documents rather than SageMaker
+  data capture. `parse_capture_record` handles the capture envelope and is
+  tested, but has never seen a real capture file. - **Audit sampling is not
+  implemented.** Routing a random slice of confidently auto-approved documents
+  to review is the only mechanism that would put confidently-wrong documents
+  into the feedback loop. Its absence is the largest substantive gap in the
+  drift design, not just an unbuilt feature — see the sampling-bias section. -
+  **`ks_statistic` is tested but unused by the report.** It was removed from the
+  input family after it produced false positives against a
+  histogram-reconstructed baseline. It is kept for the case where both sides
+  have real samples.
 
 **M4 specifically**
 
@@ -798,10 +803,11 @@ to every test that existed**
   limit is not catchable — so the dead-letter path was unreachable and a document
   parked over a weekend was lost silently.
 - **The canary could never have run.** Static resource names plus
-  `create_before_destroy` meant every endpoint *update* — the only path a canary takes
-  — failed with "cannot create already existing".
-- **The dead-letter alarm notified nobody**, `make destroy` failed on a clean clone,
-  and the Model Package Group was created outside Terraform so it survived teardown.
+  `create_before_destroy` meant every endpoint *update*, which is the only path
+  a canary takes, failed with "cannot create already existing". - **The
+  dead-letter alarm notified nobody**, `make destroy` failed on a clean clone,
+  and the Model Package Group was created outside Terraform so it survived
+  teardown.
 
 Each now has a test. The dimension mismatch is in the regression-proof harness, so it
 is verified to fail on the real defect rather than merely asserted.
