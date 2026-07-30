@@ -27,9 +27,9 @@ and tested locally; M4–M6 are not started.
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
-| **M4** Observability | **Code + Terraform complete, never deployed** | 9 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
+| **M4** Observability | **Code + Terraform complete, never deployed** | 11 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
 | **M5** Drift + Retraining | **Drift detection working with real evidence; retrain SM written, never run; no Terraform** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Retrain state machine with the gate and no deploy path. |
-| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 335 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
+| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 343 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
 account, because no AWS credentials are configured. So `fmt` and `validate` are
@@ -41,6 +41,11 @@ training and evaluation output. `m2/` holds a real load measurement but **no rol
 recording** — M2's actual deliverable. `m3/` holds traces from a local *simulation*,
 not a Step Functions execution. Each evidence folder states its own caveat; none of
 them are a substitute for a run against AWS.
+
+**Prepared answers to the seven live-discussion questions** are in
+[`docs/discussion.md`](./docs/discussion.md), including the two where the honest
+answer is "this design would not catch that". The evidence index — what exists, what
+is a local substitute, and what is absent — is [`evidence/README.md`](./evidence/README.md).
 
 The per-milestone plan of record is in [`tasks/`](./tasks/), with an audit of M0
 against the grading rubric recorded in
@@ -120,7 +125,7 @@ that only works inside a job.
 
 ```bash
 make venv            # .venv with pinned dependencies (Python 3.12)
-make test            # 330 tests, mypy-strict clean
+make test            # 343 tests, mypy-strict clean
 make typecheck       # mypy --strict, clean
 make data            # deterministic corpus + content-addressed snapshot id
 make two-versions    # the M1 deliverable: two distinguishable registry versions
@@ -510,7 +515,7 @@ actually goes:
 | M1 | SageMaker Training + Processing jobs | Billed per second of instance time. Minutes per run on a small instance. |
 | M2 | SageMaker inference endpoint | **The dominant cost, and now decided.** Real-time `ml.t3.medium` at ~$0.05/hr — ~$1.20/day if left running, and briefly double that during a canary while both fleets are alive. Serverless was rejected: it cannot do data capture, autoscaling, or canary rollback, which are the inputs to M5 and the whole of M2. `deploy_endpoint` defaults to **false**, `max_capacity = 2` caps scale-out, and `make destroy` removes it. |
 | M3 | Textract, Bedrock | Textract `DetectDocumentText` ~$1.50/1k pages. Bedrock is per-token and model-dependent; the constant gets pinned when the model is chosen. |
-| M4 | CloudWatch custom metrics, dashboards | Per-metric monthly + dashboard fee. Small but not free at ~12 custom metrics. |
+| M4 | CloudWatch custom metrics, dashboards | Per-metric monthly + dashboard fee. Small but not free at 11 custom metrics x 2 dimensions. |
 | M5 | Scheduled drift Processing job | Per-second instance time, once per schedule tick. |
 
 The single biggest lever on total spend is **not leaving an endpoint running**.
@@ -567,6 +572,33 @@ There is no `iam:*`, no `Action: "*"` grant, and no service-level action
 wildcard anywhere.
 
 ---
+
+## Where this landed
+
+Six milestones of code, none of it deployed. The split is worth stating plainly
+because it is the whole character of this submission:
+
+**Verified, by something other than my own assertion**
+- 343 tests, `mypy --strict` on 35 files, `ruff` clean, `terraform validate` on three roots
+- A **green PR and main run on GitHub Actions** — real CI, which caught three bugs local
+  development had masked, including a container that could not have started on SageMaker
+- Five regression tests **proved** to fail on the regressions they target
+- Real drift math against the real baseline, producing the three-verdict evidence
+- A real load measurement that corrected two of my own guessed thresholds
+
+**Written and validated, but never executed**
+- Every Terraform resource. `plan`, `apply` and `destroy` have never run.
+- Both state machines. No execution history exists.
+- The endpoint, the canary, the rollback alarms, the dashboard, the scheduled drift job.
+
+**Absent**
+- The M2 auto-rollback recording and the M5 full retrain cycle — two named deliverables
+  that need a live account.
+- The dashboard screenshot.
+
+The single blocker is AWS credentials. Everything above the line was built to be
+verifiable without them, deliberately, and everything below is named rather than
+approximated.
 
 ## Known gaps
 

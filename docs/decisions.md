@@ -1269,3 +1269,66 @@ leak by a different route.
 
 **I'd flip this if:** the repo were private and the plan were needed verbatim for
 review — but even then, truncation is worth keeping, because a 60k comment is not read.
+
+---
+
+# Decision log — M7 (Submission)
+
+## Documentation claims are tested, because prose rots
+
+**Chose:** `tests/test_docs_consistency.py` asserts the README's factual claims against
+the repo — test count, alarm count, custom-metric count, that every milestone has a
+known-gaps subsection, that all seven discussion answers exist, that each evidence
+folder carries its own caveat.
+
+**Over:** proof-reading before submission, which is what everyone intends to do.
+
+**Because:** the same failure happened four times here. Three separate hardcoded
+wildcard counts went stale; the README claimed "only M0 is implemented" two milestones
+after that stopped being true; and at one point it said both 330 and 335 tests in the
+same file. The rubric names "a README that describes intentions rather than what you
+built" as a point-loser, and a stale number is that failure in miniature.
+
+The rule this encodes: **never write a count into prose that a command can produce.**
+Where a number must appear for readability, it gets a test.
+
+It proved itself immediately — adding the 13 doc tests made the README's own test
+count stale, and the new test caught it in the same run.
+
+**And it must fail rather than skip.** The first version skipped when it could not
+parse pytest's output, which is exactly the failure the regression-proof harness
+caught elsewhere: a skipped test is green in every report and catches nothing.
+
+## The evidence index leads with what is absent
+
+**Chose:** `evidence/README.md` opens with a table whose most prominent column is
+status — "absent", "local simulation", "real" — and each folder repeats its own caveat.
+
+**Over:** an index listing what is present, which is the natural way to write it.
+
+**Because:** a reader lands in one folder without reading the index, and evidence that
+does not say what it is not will be over-read. Two of these artifacts are honest local
+substitutes and two are missing entirely; a reviewer discovering that themselves,
+after assuming otherwise, is far worse than being told up front.
+
+It is also the more useful document. "The M2 rollback recording is absent" is a fact
+about the submission; "here are some throughput numbers" is not.
+
+## Answering the discussion questions where the answer is "this would not catch it"
+
+**Chose:** `docs/discussion.md` answers Q2 ("quality dropped, drift is green") and Q7
+(sampling bias) by stating plainly that the current metric set can miss the failure,
+and naming the two additions that would close it.
+
+**Over:** describing the metrics that exist and letting them look sufficient.
+
+**Because:** the question is diagnostic — it is asked precisely because a well-built
+version of this system still has that blind spot. Confidently-wrong documents
+auto-approve, are never reviewed, never corrected, and never enter the training data,
+so the model's specific weakness is the one region the feedback loop structurally
+cannot reach. An answer claiming the dashboard would catch it would be wrong, and
+obviously wrong to anyone who has run one of these systems.
+
+Audit sampling — routing a small random share of confidently auto-approved documents
+to review anyway — answers both questions with one change. It is not implemented, and
+saying so is worth more than implementing something weaker and claiming it suffices.
