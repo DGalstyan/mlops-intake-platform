@@ -47,7 +47,10 @@ COPY src/inference/ ./src/inference/
 
 # Non-root. SageMaker does not require it, but a container that only needs to
 # read a model and answer HTTP has no reason to run privileged.
+COPY src/inference/entrypoint.sh /opt/program/entrypoint.sh
+
 RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 serving \
+    && chmod +x /opt/program/entrypoint.sh \
     && chown -R serving:serving /opt/program
 USER serving
 
@@ -59,20 +62,12 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=3 \
     CMD curl -fsS http://localhost:8080/ping || exit 1
 
-# `serve` is the argument SageMaker passes. Accepting it as the CMD (rather than
-# an ENTRYPOINT script that ignores its arguments) keeps the container's
-# interface honest about what SageMaker actually invokes.
+# SageMaker starts the container with the single argument `serve`. That argument
+# REPLACES CMD, so `ENTRYPOINT ["gunicorn"]` + gunicorn args in CMD produces
+# `gunicorn serve` — gunicorn treats `serve` as the module to import and the worker
+# dies with ModuleNotFoundError. The image builds and the Dockerfile reads correctly;
+# only running it the way SageMaker does reveals the problem.
 #
-# One worker, two threads: the model is held in process memory and is not
-# thread-safe to fit, only to predict. Scaling out is the autoscaling policy's
-# job, not gunicorn's — more workers would multiply memory by the model size for
-# no throughput gain on a CPU-bound sparse dot product.
-ENTRYPOINT ["gunicorn"]
-CMD ["--bind", "0.0.0.0:8080", \
-     "--workers", "1", \
-     "--threads", "2", \
-     "--timeout", "60", \
-     "--graceful-timeout", "30", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "src.inference.serve:app"]
+# An entrypoint script that interprets the argument is the correct BYOC pattern.
+ENTRYPOINT ["/opt/program/entrypoint.sh"]
+CMD ["serve"]
