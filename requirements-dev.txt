@@ -1,4 +1,10 @@
 -r requirements.txt
+# The serving dependencies too: src/inference/serve.py imports flask, so a dev
+# environment without it cannot type-check the repo. Declaring only the training
+# dependencies here meant mypy passed locally (where flask happened to be
+# installed) and failed in CI, which is the failure mode a lockfile exists to
+# prevent.
+-r requirements-inference.txt
 
 # Registry / AWS control-plane calls. Not needed by the training container
 # itself — the training job is handed data and writes artifacts; it never calls

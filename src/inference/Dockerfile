@@ -35,7 +35,7 @@ WORKDIR /opt/program
 # Dependencies before source, so editing a handler does not invalidate the
 # (slow) scientific-stack install layer.
 COPY requirements.txt requirements-inference.txt ./
-RUN pip install --require-hashes=false -r requirements-inference.txt
+RUN pip install --no-cache-dir -r requirements-inference.txt
 
 # Only what serving actually needs. src/training is copied because the model
 # artifact is unpickled through src.training.model's loader — the same interface
