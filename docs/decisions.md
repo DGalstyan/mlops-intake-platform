@@ -1162,3 +1162,110 @@ would be impractical against a deployed state machine.
 The same reasoning makes the retrain evaluation reuse `src.training.evaluate` as its
 container entrypoint rather than a separate evaluation script. A gate comparing numbers
 produced by two different code paths is comparing two different things.
+
+---
+
+# Decision log — M6 (CI/CD)
+
+## Every PR check that can run without AWS, does
+
+**Chose:** lint, type-check, tests, regression proofs, `terraform fmt`/`validate` and
+the container build all run with **no credentials**. Only `terraform plan` needs AWS,
+and it is skipped entirely when no deploy role is configured.
+
+**Over:** the conventional shape, where the PR pipeline assumes an account and fails
+without one.
+
+**Because:** a check that needs cloud access does not run on forks, and it makes "is
+this change correct?" depend on "is the account reachable?". A contributor should be
+able to learn their change is broken without being granted an AWS role. It also means
+this repo has a genuinely green CI run today, which is the only milestone here that
+can say that.
+
+The skip is deliberate rather than a workaround: `if: vars.AWS_DEPLOY_ROLE_ARN != ''`
+makes the pipeline green-without-an-account rather than red-for-an-unrelated-reason.
+A red pipeline that everyone knows to ignore is worse than a smaller green one.
+
+**I'd flip this if:** the AWS-dependent checks were the ones catching real bugs. So
+far the opposite is true — every bug CI has caught came from a credential-free job.
+
+## The container is RUN in CI, not just built
+
+**Chose:** the container job builds the image and then executes
+`scripts/container_smoke.sh` against it, which starts it the way SageMaker does
+(`docker run IMAGE serve`) and checks `/ping`, `/invocations`, the correlation-id
+echo, the 4xx-not-5xx mapping, and 503-with-no-model.
+
+**Over:** building the image and calling that verification, which is what most
+pipelines do.
+
+**Because:** it immediately caught a bug that a build alone never would.
+`ENTRYPOINT ["gunicorn"]` with the arguments in CMD looks correct; but a command
+passed to `docker run` *replaces* CMD, so SageMaker's `serve` argument became
+gunicorn's module name. The container ran `gunicorn serve`, the worker died with
+`ModuleNotFoundError`, and the image built perfectly. That was an M2 bug that would
+have survived to a live endpoint — and the Dockerfile carried a comment claiming the
+case was handled.
+
+**The general lesson:** "it builds" and "it runs the way the platform starts it" are
+different claims, and only the second one matters.
+
+## The regression tests are proved, not asserted
+
+**Chose:** `scripts/prove_regression_tests.py` injects five real defects into a copy
+of the tree, asserts the nominated test **fails**, restores, and asserts it passes
+again. It runs in CI.
+
+**Over:** nominating a test in the README and trusting that it works.
+
+**Because:** a test that has only ever been observed passing is an assertion about
+nothing. It might be tautological, asserting on the wrong object, or silently
+skipped — and all three were true here on the first run:
+
+- a test that skipped whenever a generated artifact was absent, which is always in CI,
+- an assertion that checked a condition expression *contained* `attribute_not_exists`
+  and would therefore accept `attribute_exists(x) or attribute_not_exists(x)`,
+- two bugs in the harness itself.
+
+Checking both directions matters as much as the injection: a test that fails on
+everything is as useless as one that fails on nothing, so the harness verifies the
+test passes on clean code first.
+
+**I'd flip this if:** mutation testing were in place — this is a hand-curated subset
+of what a mutation tester does automatically. The curation is the point at this size,
+though: five defects chosen because they are *plausible* and *invisible in review*
+beat a thousand random mutants nobody reads.
+
+## `main` deploys infrastructure but never promotes a model
+
+**Chose:** the main workflow applies Terraform to dev and runs the endpoint smoke
+test, but does not deploy a model version. `deploy_endpoint` stays whatever the tfvars
+say, and promoting a model remains the registry-approval path.
+
+**Over:** a pipeline where merging to main ships the newest model.
+
+**Because:** an apply that could also swap the serving model is a deploy pipeline
+pretending to be an infrastructure pipeline, and it would route around the human gate
+the entire M5 design rests on. "Promote" here means "this commit passed dev and is
+eligible for staging" — applying to staging stays a human action for the same reason.
+
+`concurrency` is deliberately **not** `cancel-in-progress`: cancelling mid-apply
+leaves Terraform state locked and the environment half-changed. Queueing is the only
+safe behaviour for a workflow that mutates infrastructure — the opposite of the PR
+workflow, where cancelling a superseded run is free.
+
+## Plan output is redacted before it reaches a PR comment
+
+**Chose:** `sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g'` over the plan before posting, and
+truncation to 60k characters.
+
+**Over:** posting the plan verbatim, which is what the common recipes do.
+
+**Because:** this repo is **public**. A Terraform plan routinely contains account ids
+and full ARNs, and a PR comment is world-readable and permanent — it survives the
+branch, the PR, and any later cleanup of the repo. The rubric names account ids in the
+repo as an instant point-loser, and a bot posting them into a comment is the same
+leak by a different route.
+
+**I'd flip this if:** the repo were private and the plan were needed verbatim for
+review — but even then, truncation is worth keeping, because a 60k comment is not read.

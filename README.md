@@ -29,7 +29,7 @@ and tested locally; M4–M6 are not started.
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
 | **M4** Observability | **Code + Terraform complete, never deployed** | 9 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
 | **M5** Drift + Retraining | **Drift detection working with real evidence; retrain SM written, never run; no Terraform** | PSI/KS/categorical drift math (tested against hand-computed values), three-family classification, drift reports from the real baseline and shifted batch. Retrain state machine with the gate and no deploy path. |
-| M6 CI/CD | Not started | `.github/workflows/` is empty |
+| **M6** CI/CD | **GREEN PR + main runs on GitHub Actions** | PR: lint, mypy --strict, 335 tests, 5 regression proofs, terraform validate, container build + contract check. main: verify, then AWS jobs gated on a deploy role. Retrain workflow is `workflow_dispatch` only. |
 
 **What "never applied" means:** `terraform plan` has not been run against a real
 account, because no AWS credentials are configured. So `fmt` and `validate` are
@@ -578,6 +578,21 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M6 specifically**
+
+- **Every AWS job has never run.** The plan comment, the ECR push, `terraform
+  apply`, the endpoint smoke test and the promote step are all gated on
+  `AWS_DEPLOY_ROLE_ARN` and skipped. The green runs prove the no-AWS half only.
+- **The OIDC trust relationship is unverified.** The role and its `sub` conditions
+  are written in `infra/modules/stack/iam.tf`, but no workflow has ever assumed it,
+  so the trust policy could be wrong in a way only a real `AssumeRoleWithWebIdentity`
+  would reveal.
+- **Actions are pinned to major version tags, not commit SHAs.** `@v4` still allows
+  the tag to move. SHA pinning is the stricter posture and is the obvious hardening
+  step.
+- **`ruff format` is not enforced.** Lint is; formatting would have reformatted 31
+  files in one commit, and the diff cost outweighed the benefit at this stage.
 
 **M5 specifically**
 
