@@ -27,7 +27,7 @@ and tested locally; M4–M6 are not started.
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
 | **M3** Orchestration + HITL | **Code + Terraform complete, never deployed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. 5 DynamoDB tables, 3 Lambdas each with its own role, EventBridge trigger with deterministic execution names, review API. Local simulation produces the two required traces. |
-| M4 Observability | Not started | — |
+| **M4** Observability | **Code + Terraform complete, never deployed** | 9 custom metrics emitted via direct SDK, 11 alarms, 4-section dashboard in Terraform, prices as shared data, generated alarm inventory, runbook. No dashboard screenshot — needs a deployment. |
 | M5 Drift + Retraining | Not started | — |
 | M6 CI/CD | Not started | `.github/workflows/` is empty |
 
@@ -263,6 +263,119 @@ values are recorded as the explicit string `unknown` rather than defaulted,
 because only an explicit unknown is detectable in review. Locally the image digest
 is legitimately unknown and training prints a warning saying so.
 
+## Observability: what actually measures model quality
+
+The assignment asks this directly, so here is the direct answer.
+
+### There is no ground truth in production
+
+Every document that auto-approves does so *because nobody checked it*. So accuracy
+is not measurable in production — only on the frozen golden set, offline, at M1.
+Everything below is a **proxy**, and the useful question about a proxy is not "what
+does it say" but "what is it blind to".
+
+### The split
+
+| Metric | Measures | Blind to |
+|---|---|---|
+| `HumanOverrideRate` | **model quality — primary proxy** | Confidently-wrong documents. Reviewers only see the low-confidence and always-review slice. |
+| `Confidence` p10 / p50 | **model quality — concept-drift proxy** | A model that is confidently wrong in a *new* way. Calibration is measured offline; a miscalibrated model reports high confidence while being wrong. |
+| `SchemaValidationFailureRate` | **model quality — extraction** | Extraction that is plausible but wrong. A hallucinated invoice number passes every schema check. |
+| `AutoApprovalRate` | **model quality — indirect** | Cannot distinguish "model got worse" from "harder documents arrived". Needs the drift report to disambiguate. |
+| `EndToEndLatencyP95`, per-stage latency | system health | Everything about correctness. |
+| `ExecutionsFailed`, DLQ depth | system health / data safety | Everything about correctness. A perfectly-running pipeline emitting wrong answers is green here. |
+| `EstimatedCostPerDocument`, token volumes | cost | Correctness, except indirectly — rising output tokens often means the model started padding, which also breaks JSON parsing. |
+
+The whole reason the model-health section exists is that **every system-health metric
+can be green while the model is quietly wrong.** That is the normal failure, not the
+exotic one.
+
+### The primary proxy, and where it misleads
+
+**`HumanOverrideRate` on the reviewed slice.** When reviewers change the class more
+often than they used to, something moved.
+
+It misleads in three specific ways, and all three matter:
+
+1. **Selection bias by construction.** The denominator is documents that were routed
+   to a human — low confidence, or an always-review class. That slice is *selected
+   for being hard*, so the absolute rate is high and meaningless. Only the **change**
+   is informative. This is the same bias that poisons the retraining data, and it is
+   the subject of M5's sampling-bias section.
+2. **It cannot see the failure that matters most.** A confidently-wrong document
+   auto-approves, so no human ever looks at it, so it never enters this metric. If
+   the model becomes confidently wrong — which is exactly what a miscalibrated model
+   does — the override rate can *fall* while quality collapses.
+3. **It measures reviewers as much as the model.** A new reviewer who disagrees about
+   ambiguous documents moves this number with no model change at all. The corrections
+   table records `reviewer_id` precisely so that can be checked.
+
+### The scenario this design would fail
+
+*"A customer says extraction quality dropped last week. Your drift metrics are all
+green."*
+
+The honest answer: **the current metric set can miss this**, and the reason is
+structural rather than a tuning problem.
+
+- Input drift compares distributions. If a sender changed one field's *layout*
+  without changing document length or vocabulary, the distributions barely move.
+- Prediction drift compares class balance. Extraction quality is not a class.
+- The override rate only covers reviewed documents. If the affected documents are
+  confidently classified — likely, since classification and extraction are separate
+  models — they auto-approve and are never reviewed.
+- Schema validation catches *malformed* output, not *wrong* output. A confidently
+  hallucinated `total_amount` is schema-valid.
+
+What *should* have caught it, and what would close the gap:
+
+- **Field-level extraction confidence and null rates per field.** A field that
+  silently starts coming back null on 30% of one class is the signal. Not
+  implemented — the metric set tracks validation failures, not field-level null
+  rates.
+- **An audit sample of auto-approved documents.** Routing a small random percentage
+  of *confidently* auto-approved documents to human review anyway is the only way to
+  measure the blind spot, and it is also the fix for the retraining sampling bias.
+  Not implemented, and it is the single highest-value addition to this design.
+
+Both are in the known-gaps list rather than quietly absent.
+
+### Why rates are metric math over raw counters
+
+The state machine emits counters — `DocumentsProcessed`, `AutoApproved`,
+`HumanOverride`, `LLMInputTokens` — and every rate and the cost figure are derived
+with CloudWatch metric math. Two reasons:
+
+1. A pre-averaged rate is frozen at the period it was computed for. Counters let the
+   dashboard show a 15-minute rate while an alarm evaluates an hourly one over the
+   same data.
+2. `EstimatedCostPerDocument` has to be computed from *real token counts × documented
+   prices*. Emitting a pre-computed cost would bake today's price list into stored
+   datapoints and make last week's cost unrecomputable when prices change. Prices
+   live in `config/prices.json`, read by both Terraform and Python, with the date they
+   were retrieved.
+
+`correlation_id` is deliberately **not** a metric dimension. CloudWatch bills per
+metric-name × dimension-value combination, so dimensioning by it would create one
+custom metric per document. It belongs in logs and traces, and there is a test
+asserting it never becomes a dimension.
+
+### Alarms
+
+11 alarms, inventoried in [`evidence/m4/alarm-inventory.md`](./evidence/m4/alarm-inventory.md)
+— generated from the Terraform by `make alarm-inventory`, with a test asserting the
+committed file matches a fresh render. Each carries what breaks, the first response,
+and a runbook link in its own description, because an alarm that fires at 3am without
+saying what to do has failed at the only moment it matters.
+
+**Who is paged: nobody, yet.** Every alarm publishes to one SNS topic with no
+subscriber by default. `alarm_email` adds an address, but a real rotation needs an
+on-call tool and an escalation policy. Inventing a paging story this repo does not
+implement would be worse than saying so. The split that *would* matter: the
+model-quality alarms are not wake-someone-up events — they need a human with the
+corrections table and a day to think — while the pipeline-health and dead-letter
+alarms are.
+
 ## Cost
 
 Prices are us-east-1 list, October 2025, and are the constants used below.
@@ -357,6 +470,29 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M4 specifically**
+
+- **No dashboard screenshot.** Half of M4's deliverable. The dashboard is defined in
+  Terraform and validates, but a screenshot needs it deployed with real data behind
+  it. The other half — the alarm inventory — is generated from the Terraform and is
+  in `evidence/m4/`.
+- **No metric has ever been emitted.** The nine custom metrics, their dimensions and
+  the metric-math expressions that derive rates from them are all unverified against
+  CloudWatch. A metric-math expression with a typo renders as a blank panel, and
+  nothing local catches that.
+- **No X-Ray trace has been captured.** Tracing is enabled on the state machine and
+  the Lambdas (`enable_xray`), and the runbook documents how to query a trace by
+  `correlation_id`, but the annotation that makes that query work is not yet set —
+  X-Ray filters on annotations, and nothing currently calls `put_annotation`. **The
+  runbook's trace query would return nothing as written.**
+- **Per-stage latency is not a custom metric.** It comes from X-Ray segments and
+  `AWS/States` rather than from `Intake/Platform`, so the dashboard shows end-to-end
+  latency and per-stage timing lives in the trace view. Defensible, but it means the
+  per-stage panel the assignment asks for is not on the dashboard.
+- **Alarm thresholds are reasoned, not calibrated.** Every one has a documented
+  rationale, but none has been checked against real traffic. The auto-approval floor
+  of 70% comes from an ~88% golden-set rate; production could sit anywhere.
 
 **M3 specifically**
 

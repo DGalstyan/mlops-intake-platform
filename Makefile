@@ -14,6 +14,7 @@ endif
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
         measure-throughput docker-build docker-smoke resolve-approved smoke-test \
         simulate-intake prompts package-lambdas seed-prompts wildcard-audit \
+        alarm-inventory \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -240,3 +241,10 @@ wildcard-audit:
 	@echo ""
 	@echo "Principal/Action wildcards (expected: one Deny-on-insecure-transport):"
 	@grep -rn 'identifiers = \["\*"\]\|actions = \["s3:\*"\]' infra/ || echo "  none"
+
+# --- M4 observability ------------------------------------------------------
+# Regenerate the alarm inventory from the Terraform source. Half of M4's
+# deliverable, and the half that needs no AWS. A test asserts the committed file
+# matches a fresh render, so adding an alarm without regenerating fails CI.
+alarm-inventory: venv
+	$(PY) scripts/render_alarm_inventory.py --output evidence/m4/alarm-inventory.md

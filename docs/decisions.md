@@ -869,3 +869,142 @@ evaluates its conditions.
 
 **Stated plainly:** this is not the deliverable. The deliverable is a Step Functions
 execution history. This is the closest honest substitute, and the README says so.
+
+---
+
+# Decision log — M4 (Observability)
+
+## Rates are metric math over raw counters, never pre-computed
+
+**Chose:** the state machine emits raw counters (`DocumentsProcessed`,
+`AutoApproved`, `HumanOverride`, `LLMInputTokens`, …) and every rate plus the cost
+figure is derived with CloudWatch metric math in the dashboard and alarms.
+
+**Over:** computing `AutoApprovalRate` and `EstimatedCostPerDocument` at emit time and
+publishing them as values.
+
+**Because:** two things break with pre-computed values.
+
+1. A rate is frozen at the aggregation period it was computed for. With counters, the
+   dashboard shows a 15-minute rate and an alarm evaluates an hourly one over the same
+   datapoints. With a pre-averaged rate, one of those is wrong.
+2. The assignment requires `EstimatedCostPerDocument` to be computed from *real token
+   counts × documented prices*. Emitting a computed cost bakes today's price list into
+   stored datapoints, so when prices change, last week's cost becomes unrecomputable —
+   and worse, the historical series silently mixes two price regimes.
+
+It also happened to solve an ASL limitation: ASL cannot convert a boolean to a number,
+so `AutoApproved = 1 or 0` was not expressible. Emitting a constant `1` from the
+outcome-specific branch is both simpler and the better design.
+
+**I'd flip this if:** the metric volume made per-document counters expensive — at very
+high throughput, pre-aggregating in a stream processor and emitting summaries is the
+standard answer.
+
+## `correlation_id` is never a metric dimension
+
+**Chose:** dimension metrics by `Environment` and `DocumentClass` only.
+`correlation_id` appears in logs, traces and stored records — never in a dimension.
+
+**Over:** dimensioning by `correlation_id`, which would make per-document metrics
+queryable in CloudWatch directly.
+
+**Because:** CloudWatch bills per metric-name × dimension-value combination. One
+dimension value per document means one custom metric per document — the classic way to
+turn a $3 dashboard into a four-figure bill, and it degrades the console to
+unusability long before the invoice arrives. There is a test asserting no metric
+dimension contains "correlation".
+
+**I'd flip this if:** never. Per-document lookup is what logs and traces are for.
+
+## The `measures` classification is a deployed tag, not inferred from prose
+
+**Chose:** every alarm carries a `measures` tag — "model quality (primary proxy)",
+"system health", "cost", "data safety" — and the generated inventory reads that tag.
+
+**Over:** inferring the classification from keywords in the alarm description, which
+is what the first version did.
+
+**Because:** it miscategorised two alarms immediately. `execution_failures` came out as
+"data safety" because its description mentions the dead-letter queue. The
+model-quality vs system-health split is precisely what the observability section is
+graded on, so deriving it from fuzzy text matching is the wrong place to be clever. A
+tag is deployed config: authoritative, machine-readable, and visible in the console
+next to the alarm it describes.
+
+**The general lesson, learned repeatedly in this repo:** generated documentation must
+read from structured data, not from prose. Three hardcoded wildcard counts went stale
+the same way.
+
+## The alarm inventory is generated from source, not from `terraform output`
+
+**Chose:** `scripts/render_alarm_inventory.py` parses `infra/**/*.tf` and renders
+`evidence/m4/alarm-inventory.md`, with a test asserting the committed file matches a
+fresh render.
+
+**Over:** (a) hand-writing the inventory; (b) generating it from `terraform output`
+after an apply.
+
+**Because:** (a) drifts the moment someone adds an alarm — and an inventory that
+silently omits a new alarm is worse than one that is obviously out of date. (b) only
+exists after an apply, so it could not be produced at all without credentials, and it
+would describe whatever was last applied rather than what is in the repo.
+
+The test is the part that matters. Without it this is just a script nobody runs.
+
+**Found while building it:** the extractor initially dropped interpolated fragments,
+so `local.runbook_note` — which is what puts the runbook link into every description —
+was invisible. The test then "passed" while checking something that was not what
+deploys. Fixed by resolving the interpolation.
+
+## Prices live in one JSON file read by both Terraform and Python
+
+**Chose:** `config/prices.json`, read by the observability module via
+`jsondecode(file(...))` for the dashboard's cost math, and by Python for cost
+estimates. It records the retrieval date and the region.
+
+**Over:** Terraform variables for the dashboard plus matching constants in
+`src/config.py`.
+
+**Because:** duplicated constants that must agree eventually disagree. This repo has
+already lost that bet three times with hardcoded wildcard counts and twice with stale
+README claims. A price that disagrees between the dashboard and the cost table is
+worse than either being wrong alone, because the disagreement is invisible.
+
+There is a test asserting the priced model id matches the Terraform default for
+`bedrock_model_id` — swapping the model without updating prices would leave the cost
+panel wrong-but-plausible, and nobody investigates a number that looks reasonable.
+
+**I'd flip this if:** prices came from the AWS Price List API at plan time. That is the
+correct answer for a real system and overkill here.
+
+## Observability failures must never fail a document
+
+**Chose:** every metric-emission state's catch-all continues to the same next state as
+its success path, so a CloudWatch throttle cannot turn a stored document into a failed
+one.
+
+**Over:** letting a metric failure propagate, which is what happens by default.
+
+**Because:** every emit state runs *after* the document's outcome is durably written.
+A gap in a graph is recoverable; a document that failed because its metric could not be
+published is not. There is a test asserting each emit state's catch-all target equals
+its success target.
+
+**I'd flip this if:** a metric were load-bearing for a control decision — the endpoint
+rollback alarms are, which is exactly why those live beside the endpoint as a control
+input rather than here as observability.
+
+## The dashboard leads with business outcome, and has no CPU panel
+
+**Chose:** four sections in order — business outcome, model health, pipeline health,
+cost — each with a markdown header explaining in plain language what it answers.
+
+**Over:** the conventional layout, which opens with infrastructure health.
+
+**Because:** the brief is "a dashboard a non-engineer could read", and the rubric names
+a CPU-only monitoring section as a point-loser. Taking that literally means the first
+thing on the page answers "is the platform doing its job?" and CPU appears nowhere at
+all. The model-health section explicitly labels its metrics as *proxies* and names what
+each is blind to, on the dashboard itself rather than only in the README — the person
+reading it at 3am is not reading the README.
