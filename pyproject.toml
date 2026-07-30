@@ -41,3 +41,37 @@ ignore_missing_imports = true
 [tool.coverage.run]
 source = ["src"]
 omit = ["*/__init__.py"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# Deliberately narrow. A linter that flags 400 stylistic nits on first run gets
+# `--fix`-ed blindly or switched off; these are the rules that catch actual defects.
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes: undefined names, unused imports, f-strings without placeholders
+    "I",   # import sorting
+    "B",   # bugbear: mutable defaults, loop-variable binding, except-without-raise
+    "UP",  # pyupgrade: syntax that is obsolete on the pinned Python
+    "SIM", # obvious simplifications
+]
+ignore = [
+    "E501",  # line length is handled by the formatter's judgement, not a hard fail
+    "B008",  # function call in a default arg — intentional for Path defaults
+    # `isinstance(x, (int, float))` reads better than `isinstance(x, int | float)`
+    # for the numeric-type checks in the validator, and both are correct on 3.12.
+    "UP038",
+    # Nested `if`s are frequently the clearer form here: the outer condition is a
+    # type guard and the inner one is the actual check, and collapsing them with
+    # `and` obscures which is which.
+    "SIM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Entrypoints bootstrap sys.path before importing src.*, so their imports cannot be
+# at the top of the file. That is a real constraint of running the same module both
+# as a script and inside a SageMaker container, not a style lapse.
+"src/**/*.py" = ["E402"]
+"scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]

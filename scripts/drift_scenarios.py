@@ -20,12 +20,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.data import generate  # noqa: E402
 from src.drift.detect import iter_local_records, window_from_records  # noqa: E402
 from src.drift.report import build_report, dumps, render_markdown  # noqa: E402
 from src.training.model import load_classifier  # noqa: E402

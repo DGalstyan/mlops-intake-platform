@@ -25,9 +25,10 @@ the same number and prescribe the same action for both. That is the bug.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Final, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any, Final
 
 import numpy as np
 
@@ -448,7 +449,7 @@ def build_report(
     return {
         "schema_version": DRIFT_REPORT_SCHEMA_VERSION,
         "generated_at": generated_at
-        or datetime.now(tz=timezone.utc).isoformat(timespec="seconds"),
+        or datetime.now(tz=UTC).isoformat(timespec="seconds"),
         "window": {
             "label": window_label,
             "documents": window.size,

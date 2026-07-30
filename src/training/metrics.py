@@ -18,8 +18,9 @@ per-class floor in the gate exists to catch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -68,7 +69,7 @@ def confusion_matrix(
     _validate_lengths(y_true, y_pred)
     index = {label: i for i, label in enumerate(labels)}
     matrix = np.zeros((len(labels), len(labels)), dtype=np.int64)
-    for truth, prediction in zip(y_true, y_pred):
+    for truth, prediction in zip(y_true, y_pred, strict=False):
         if truth not in index:
             raise ValueError(f"y_true contains unknown label {truth!r}")
         if prediction not in index:
@@ -123,7 +124,7 @@ def macro_f1(
 
 def accuracy(y_true: Sequence[str], y_pred: Sequence[str]) -> float:
     _validate_lengths(y_true, y_pred)
-    correct = sum(1 for t, p in zip(y_true, y_pred) if t == p)
+    correct = sum(1 for t, p in zip(y_true, y_pred, strict=False) if t == p)
     return correct / len(y_true)
 
 
@@ -239,7 +240,7 @@ def evaluate(
         )
 
     confidences = top_class_confidence(proba)
-    correct = [t == p for t, p in zip(y_true, y_pred)]
+    correct = [t == p for t, p in zip(y_true, y_pred, strict=False)]
 
     return {
         "macro_f1": macro_f1(y_true, y_pred, labels),

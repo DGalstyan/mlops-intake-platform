@@ -20,8 +20,9 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Iterator, Sequence
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 

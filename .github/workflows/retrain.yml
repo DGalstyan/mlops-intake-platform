@@ -1,0 +1,121 @@
+name: retrain
+
+# MANUALLY TRIGGERED ONLY. There is deliberately no schedule and no push trigger.
+#
+# The drift job can decide a retrain is warranted and start the state machine on its
+# own — that path exists and is fine, because the state machine stops at
+# registration. This workflow is the human-initiated equivalent, for "I have read the
+# drift report and I want to try a candidate".
+#
+# Neither path deploys. The retrain state machine registers a candidate as
+# PendingManualApproval and stops; a person approving that version in the Model
+# Registry is what emits the EventBridge event that starts the canary.
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you retraining? Recorded on the registered version."
+        required: true
+        type: string
+      environment:
+        description: "Environment to retrain in"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, staging]
+      drift_report_uri:
+        description: "s3:// URI of the drift report that motivated this, if any"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # One retrain at a time per environment. Two concurrent retrains would register
+  # two candidates from the same champion and make "which one is better" ambiguous.
+  group: retrain-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  retrain:
+    name: Start retrain
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to run without a configured role
+        if: vars.AWS_DEPLOY_ROLE_ARN == ''
+        run: |
+          echo "::error::AWS_DEPLOY_ROLE_ARN is not set. Nothing to retrain against."
+          exit 1
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-session-name: intake-retrain-${{ github.run_id }}
+
+      - name: Start the retrain state machine
+        id: start
+        run: |
+          set -euo pipefail
+          REGION="${{ vars.AWS_REGION || 'us-east-1' }}"
+          ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
+          SM_ARN="arn:aws:states:${REGION}:${ACCOUNT}:stateMachine:intake-retrain-${{ inputs.environment }}"
+
+          # The trigger reason travels into the registered version's metadata, so
+          # "why does version 7 exist" is answerable from the registry alone.
+          INPUT=$(jq -nc \
+            --arg src "github-actions:${{ github.actor }}" \
+            --arg reason "${{ inputs.reason }}" \
+            --arg report "${{ inputs.drift_report_uri }}" \
+            '{
+               trigger_source: $src,
+               drift_verdict: $reason,
+               drift_report_uri: $report,
+               champion_metrics_uri: "",
+               data_snapshot_uri: ""
+             }')
+
+          ARN=$(aws stepfunctions start-execution \
+            --state-machine-arn "$SM_ARN" \
+            --input "$INPUT" \
+            --query executionArn --output text)
+          echo "execution_arn=$ARN" >> "$GITHUB_OUTPUT"
+          echo "::notice::started $ARN"
+
+      - name: Wait for the gate decision
+        # Polls rather than blocking on a synchronous call: training can take longer
+        # than a step's patience, and a timed-out workflow step would leave the
+        # execution running with nobody watching it.
+        run: |
+          set -euo pipefail
+          ARN="${{ steps.start.outputs.execution_arn }}"
+          for _ in $(seq 1 120); do
+            STATUS=$(aws stepfunctions describe-execution --execution-arn "$ARN" --query status --output text)
+            if [ "$STATUS" != "RUNNING" ]; then
+              echo "::notice::execution finished: $STATUS"
+              aws stepfunctions describe-execution --execution-arn "$ARN" \
+                --query '{status:status,output:output}' --output json \
+                | sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g'
+              # SUCCEEDED covers BOTH "candidate registered, awaiting approval" and
+              # "candidate rejected by the gate". A rejection is the system working,
+              # so it must not fail this workflow — read the output to see which.
+              [ "$STATUS" = "SUCCEEDED" ] || exit 1
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::still running after 60 minutes; check the execution directly"
+          exit 1
+
+      - name: What happens next
+        if: success()
+        run: |
+          echo "::notice::If a candidate passed the gate it is registered as PendingManualApproval and is NOT deployed. Approving it in the SageMaker Model Registry is what triggers the canary deploy. Check the per-class F1 before approving — see the sampling-bias section in the README."

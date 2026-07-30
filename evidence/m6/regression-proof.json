@@ -1,0 +1,51 @@
+{
+  "proved": 5,
+  "caught": 5,
+  "results": [
+    {
+      "regression": "inference-contract-rename",
+      "test": "tests/test_inference.py::TestResponseContract",
+      "why_it_matters": "Renaming a response key is invisible at build time. The endpoint keeps returning 200 and every CloudWatch metric stays green, while M3's Route state, M4's metrics and M5's drift parsing all break at runtime.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    },
+    {
+      "regression": "asl-retry-jitter-removed",
+      "test": "tests/test_asl.py::TestRetryPolicies::test_every_retrier_uses_full_jitter",
+      "why_it_matters": "Without full jitter, concurrent executions retry in lockstep. A batch S3 upload starts many at once, they re-throttle each other, and documents are lost to a throttle the retry policy was supposed to absorb. Nothing about the definition looks wrong.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    },
+    {
+      "regression": "retrain-auto-approves",
+      "test": "tests/test_asl.py::TestRetrainSafety::test_registration_is_always_pending_manual_approval",
+      "why_it_matters": "The single most dangerous change possible in this repo: a retrained model registering itself as Approved deploys itself, with no human between 'the numbers improved' and 'serving production traffic'. It is a one-word diff.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    },
+    {
+      "regression": "drift-baseline-uses-training-confidence",
+      "test": "tests/test_drift.py::TestFalsePositiveRegressions::test_confidence_reference_is_held_out_not_training",
+      "why_it_matters": "A model is more confident on documents it memorised. Sourcing the baseline's confidence reference from training data makes every production window report ~15% decay that is really memorisation \u2014 a permanent false alarm from day one, which gets the detector muted.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    },
+    {
+      "regression": "idempotency-guard-removed",
+      "test": "tests/test_asl.py::TestIdempotency::test_review_task_creation_is_conditional",
+      "why_it_matters": "Dropping the conditional write on the review task means one document can produce two review tasks \u2014 wasting a reviewer's time and producing two conflicting corrections that both become training labels.",
+      "passes_on_clean_code": true,
+      "fails_on_injected_regression": true,
+      "status": "CAUGHT",
+      "detail": ""
+    }
+  ]
+}

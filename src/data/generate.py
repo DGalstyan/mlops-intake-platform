@@ -25,11 +25,11 @@ import argparse
 import hashlib
 import json
 import random
-from dataclasses import dataclass, asdict
-from pathlib import Path
-from typing import Final, Iterable, Iterator, Literal, Sequence
-
 import sys
+from collections.abc import Iterable, Iterator, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Final, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 

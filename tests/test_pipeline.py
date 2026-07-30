@@ -721,7 +721,7 @@ class TestSimulatorMatchesAsl:
 
         That is what keeps one threshold constant in the system.
         """
-        assert AUTO_APPROVE_CONFIDENCE_THRESHOLD == pytest.approx(0.80)
+        assert pytest.approx(0.80) == AUTO_APPROVE_CONFIDENCE_THRESHOLD
         raw = ASL_PATH.read_text(encoding="utf-8")
         assert "auto_approve_eligible" in raw
         assert "0.8" not in raw, (

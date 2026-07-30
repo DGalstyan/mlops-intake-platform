@@ -14,7 +14,7 @@ endif
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
         measure-throughput docker-build docker-smoke resolve-approved smoke-test \
         simulate-intake prompts package-lambdas seed-prompts wildcard-audit \
-        alarm-inventory drift drift-scenarios \
+        alarm-inventory drift drift-scenarios lint prove-regressions ci-local \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -266,3 +266,16 @@ drift: venv
 		--window $(DATA_DIR)/shifted.jsonl \
 		--classify-with $(ARTIFACTS_DIR)/v1/model/model.joblib \
 		--output-dir evidence/m5 --label "shifted batch"
+
+# --- M6 CI -----------------------------------------------------------------
+lint: venv
+	$(PY) -m ruff check .
+
+# Prove the regression tests fail on the regressions they target. A test only ever
+# seen passing is an assertion about nothing.
+prove-regressions: venv
+	$(PY) scripts/prove_regression_tests.py --output evidence/m6/regression-proof.json
+
+# Everything a PR runs, locally. No AWS needed.
+ci-local: lint typecheck test prove-regressions fmt-check validate-all
+	@echo "all PR checks passed locally"

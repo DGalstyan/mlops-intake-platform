@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from src.config import BASELINE_SCHEMA_VERSION
+from src.config import BASELINE_SCHEMA_VERSION, DOCUMENT_CLASSES
 from src.drift import metrics
 from src.drift.report import (
     ProductionWindow,
@@ -26,7 +26,6 @@ from src.drift.report import (
     classify,
     compute_concept_drift,
     compute_input_drift,
-    compute_prediction_drift,
     render_markdown,
 )
 
@@ -292,14 +291,28 @@ class TestClassification:
         using review-sourced labels biased toward hard cases — it can make the model
         worse.
         """
-        for verdict, expected in (
-            (Verdict.NO_DRIFT, False),
-            (Verdict.DATA_CHANGED, False),
-            (Verdict.MODEL_DECAYED, True),
-            (Verdict.BOTH, True),
-        ):
-            report = {"verdict": verdict}
-            assert (verdict in (Verdict.MODEL_DECAYED, Verdict.BOTH)) is expected
+        # Asserted against build_report's real output, not against a restatement of
+        # the rule. An earlier version of this test compared the verdict to a tuple
+        # defined two lines above — tautological, and ruff caught it via the unused
+        # variable that was the only trace of the intended assertion.
+        cases = [
+            # (input breached, concept breached, expected retrain)
+            (1.0, 0.90, False),   # nothing moved                -> NO_DRIFT
+            (3.0, 0.90, False),   # inputs moved, model coping    -> DATA_CHANGED
+            (1.0, 0.30, True),    # inputs steady, confidence down-> MODEL_DECAYED
+            (3.0, 0.30, True),    # both                          -> BOTH
+        ]
+        for scale, confidence, expected_retrain in cases:
+            report = build_report(
+                baseline=baseline_fixture(),
+                window=window_fixture(scale=scale, confidence=confidence),
+                window_label="t",
+            )
+            assert report["should_trigger_retrain"] is expected_retrain, (
+                f"scale={scale} confidence={confidence} produced "
+                f"{report['verdict']} with retrain="
+                f"{report['should_trigger_retrain']}"
+            )
 
 
 class TestConceptDrift:
@@ -383,15 +396,49 @@ class TestFalsePositiveRegressions:
         on an unshifted window. The M1 baseline therefore measures confidence on the
         golden set and records which source it used.
         """
-        artifact = REPO / "artifacts" / "v1" / "output" / "baseline_statistics.json"
-        if not artifact.is_file():
-            pytest.skip("run `make train` first")
-        baseline = json.loads(artifact.read_text(encoding="utf-8"))
-        assert baseline["confidence_source"] == "golden_holdout"
-        # The train reference is kept for comparison, and should be visibly higher.
-        assert (
-            baseline["confidence_train_reference"]["p10"] > baseline["confidence"]["p10"]
+        # Asserted against build_baseline directly, NOT against a committed artifact.
+        # The earlier version read artifacts/v1/output/baseline_statistics.json and
+        # skipped when it was absent — which is always, in CI and in a fresh clone. A
+        # skipped test looks green, so the regression-proof harness reported this as
+        # "not caught": the test could not have caught anything, because it never ran.
+        from src.training.baseline import build_baseline
+
+        artifact = build_baseline(
+            texts=["a document about invoices"] * 20,
+            predictions=["invoice"] * 20,
+            # Training-set confidence: inflated by memorisation.
+            confidences=[0.95] * 20,
+            labels=list(DOCUMENT_CLASSES),
+            snapshot_id="sha256:test",
+            git_sha="abc",
+            # Held-out confidence: what the model does on unseen data.
+            holdout_confidences=[0.70] * 20,
         )
+        assert artifact["confidence_source"] == "golden_holdout"
+        # The stored reference must be the HELD-OUT one, not the training one.
+        assert artifact["confidence"]["p10"] == pytest.approx(0.70)
+        assert artifact["confidence_train_reference"]["p10"] == pytest.approx(0.95)
+        assert (
+            artifact["confidence_train_reference"]["p10"] > artifact["confidence"]["p10"]
+        )
+
+    def test_baseline_without_holdout_is_labelled_as_such(self) -> None:
+        """Falling back to training confidence must be visible, not silent.
+
+        A drift job reading an older artifact needs to know its confidence reference
+        is inflated rather than silently comparing against it.
+        """
+        from src.training.baseline import build_baseline
+
+        artifact = build_baseline(
+            texts=["a document"] * 20,
+            predictions=["invoice"] * 20,
+            confidences=[0.95] * 20,
+            labels=list(DOCUMENT_CLASSES),
+            snapshot_id="sha256:test",
+            git_sha="abc",
+        )
+        assert artifact["confidence_source"] == "train"
 
     def test_input_drift_uses_psi_not_reconstructed_ks(self) -> None:
         """KS needs samples; the baseline stores a histogram.

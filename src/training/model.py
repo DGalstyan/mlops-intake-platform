@@ -16,8 +16,10 @@ interface says so up front.
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Final, Protocol, Sequence, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 import joblib
 import numpy as np
@@ -26,8 +28,6 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 

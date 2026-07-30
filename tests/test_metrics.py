@@ -15,7 +15,6 @@ from numpy.typing import NDArray
 
 from src.training import metrics
 
-
 LABELS = ("a", "b", "c")
 
 

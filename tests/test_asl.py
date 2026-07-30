@@ -271,7 +271,11 @@ class TestCatchPolicies:
 class TestIdempotency:
     def test_the_ledger_claim_is_conditional(self, states: dict[str, Any]) -> None:
         claim = states["ClaimIdempotencyKey"]
-        assert "attribute_not_exists" in claim["Parameters"]["ConditionExpression"]
+        condition = claim["Parameters"]["ConditionExpression"]
+        assert condition == "attribute_not_exists(idempotency_key)", (
+            f"ledger claim guard is {condition!r}; it must be an exact "
+            "attribute_not_exists on the partition key"
+        )
 
     def test_the_claim_happens_before_any_paid_call(
         self, definition: dict[str, Any], states: dict[str, Any]
@@ -326,12 +330,22 @@ class TestIdempotency:
         produces two conflicting corrections.
         """
         review = states["CreateReviewTask"]
-        assert "attribute_not_exists" in review["Parameters"]["ConditionExpression"]
+        condition = review["Parameters"]["ConditionExpression"]
+        # Exact match, not a substring check. An earlier version asserted only that
+        # the expression CONTAINED "attribute_not_exists", which a tautology like
+        # "attribute_exists(x) or attribute_not_exists(x)" satisfies while guarding
+        # nothing. The regression-proof harness found that by injecting exactly that.
+        assert condition == "attribute_not_exists(correlation_id)", (
+            f"review-task guard is {condition!r}; it must be exactly "
+            "attribute_not_exists(correlation_id), or one document can produce two "
+            "review tasks"
+        )
 
     def test_result_write_is_conditional(self, states: dict[str, Any]) -> None:
-        assert (
-            "attribute_not_exists"
-            in states["AutoApprove"]["Parameters"]["ConditionExpression"]
+        condition = states["AutoApprove"]["Parameters"]["ConditionExpression"]
+        assert condition == "attribute_not_exists(correlation_id)", (
+            f"result guard is {condition!r}; a substring match would accept a "
+            "tautology that guards nothing"
         )
 
 

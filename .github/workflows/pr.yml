@@ -1,0 +1,257 @@
+name: PR
+
+# Runs on every pull request, and on pushes to main so the badge reflects the
+# branch's real state rather than only its last PR.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# No credentials at the workflow level. Only the job that genuinely needs AWS
+# requests an OIDC token, and it requests the narrowest permissions that work.
+permissions:
+  contents: read
+
+concurrency:
+  # One run per branch. A force-push mid-run wastes minutes proving something about
+  # a commit nobody will merge.
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  TERRAFORM_VERSION: "1.15.8"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything in this job runs with NO AWS credentials, deliberately. A PR check
+  # that cannot run without cloud access is a check that does not run on forks, and
+  # it makes "is this change correct" depend on "is the account reachable".
+  # ---------------------------------------------------------------------------
+  python:
+    name: Lint, type-check, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type-check
+        # --strict. A type checker run in permissive mode reports success on code it
+        # declined to analyse.
+        run: mypy
+
+      - name: Test
+        # Includes the ASL structural tests, the inference contract test, and the
+        # drift control-window regression tests — see the "regression test" job note.
+        run: pytest -q --junitxml=pytest-results.xml
+
+      - name: Prove the regression tests catch their regressions
+        # M6 asks for a test that "would have caught a real regression" and to prove
+        # it. This injects each regression into a copy of the tree, asserts the
+        # nominated test FAILS, then restores and asserts it passes again. Running it
+        # in CI matters because it found three real problems the first time: a test
+        # that silently skipped (so could never catch anything), an assertion weak
+        # enough to accept a tautological guard, and a broken proof harness.
+        run: python scripts/prove_regression_tests.py --output regression-proof.json
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence
+          path: |
+            pytest-results.xml
+            regression-proof.json
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Terraform validation, also with no credentials: `-backend=false` means no state
+  # bucket and no account are needed to prove the configuration is well-formed.
+  # ---------------------------------------------------------------------------
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          # The wrapper intercepts stdout, which breaks reading plan output later.
+          terraform_wrapper: false
+
+      - name: Format check
+        # Non-mutating: fails rather than rewriting, which is the only useful
+        # behaviour in CI.
+        run: terraform fmt -check -recursive
+
+      - name: Validate every root
+        # Covers bootstrap, dev AND staging. `make validate` alone only checks the
+        # selected environment, so staging could break unnoticed.
+        run: make validate-all
+
+  # ---------------------------------------------------------------------------
+  # The container has to build before a PR merges, or main discovers the breakage.
+  # Build only — no push, no registry credentials.
+  # ---------------------------------------------------------------------------
+  container:
+    name: Build inference image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/inference/Dockerfile
+          push: false
+          load: true
+          tags: intake-inference:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the container contract
+        # Proves /ping and /invocations actually work in the built image, not just
+        # that the image builds. A container that builds and cannot serve is a
+        # green PR and a failed deploy.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          make data
+          make train
+          MODEL_DIR="$(pwd)/artifacts/model" ./scripts/container_smoke.sh intake-inference:${{ github.sha }}
+
+  # ---------------------------------------------------------------------------
+  # The only job needing AWS. Skipped entirely when no deploy role is configured, so
+  # the rest of the pipeline is green on a fork or an account-less repo rather than
+  # red for a reason unrelated to the change.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Terraform plan (dev)
+    runs-on: ubuntu-latest
+    needs: [terraform]
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
+    permissions:
+      contents: read
+      id-token: write        # required for OIDC
+      pull-requests: write   # required to post the plan comment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Configure AWS credentials via OIDC
+        # No long-lived keys anywhere. The role's trust policy is scoped to this
+        # repository and to refs/heads/main + pull_request in
+        # infra/modules/stack/iam.tf.
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-session-name: intake-pr-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Package Lambdas
+        # A plan with deploy_intake=true reads the built zip as a file, so it must
+        # exist before planning or the plan fails on a missing artifact.
+        run: make package-lambdas
+
+      - name: Plan
+        id: plan
+        run: |
+          set -o pipefail
+          make init ENV=dev
+          cd infra/envs/dev
+          terraform plan -var-file=dev.tfvars -no-color -input=false -out=tfplan \
+            | tee plan.txt
+
+      - name: Redact and summarise the plan
+        id: summary
+        run: |
+          cd infra/envs/dev
+          # Redact anything account-shaped before it reaches a PR comment on a
+          # PUBLIC repo. A plan output routinely contains account ids and ARNs, and
+          # a comment is world-readable and permanent.
+          sed -E 's/[0-9]{12}/<ACCOUNT_ID>/g' plan.txt > plan-redacted.txt
+          {
+            echo "PLAN<<EOF"
+            # GitHub comments cap at 65536 characters.
+            head -c 60000 plan-redacted.txt
+            echo ""
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment the plan on the PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.summary.outputs.PLAN }}
+        with:
+          script: |
+            const body = [
+              '### Terraform plan — `dev`',
+              '',
+              'Account ids are redacted. Full output is in the job log.',
+              '',
+              '<details><summary>Show plan</summary>',
+              '',
+              '```terraform',
+              process.env.PLAN,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+
+  # ---------------------------------------------------------------------------
+  # A single gate for branch protection to require, so adding a job later does not
+  # mean editing the protection rule.
+  # ---------------------------------------------------------------------------
+  pr-gate:
+    name: PR gate
+    runs-on: ubuntu-latest
+    needs: [python, terraform, container]
+    if: always()
+    steps:
+      - name: Fail if any required job failed
+        # `needs.*.result` is 'skipped' for the optional plan job, which must not
+        # fail the gate — but a genuine failure in a required job must.
+        run: |
+          echo "python:    ${{ needs.python.result }}"
+          echo "terraform: ${{ needs.terraform.result }}"
+          echo "container: ${{ needs.container.result }}"
+          for result in "${{ needs.python.result }}" "${{ needs.terraform.result }}" "${{ needs.container.result }}"; do
+            if [ "$result" != "success" ]; then
+              echo "::error::a required job did not succeed"
+              exit 1
+            fi
+          done
+          echo "all required checks passed"

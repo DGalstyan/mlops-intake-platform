@@ -38,14 +38,13 @@ got worse" as one signal.
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, Sequence
+from typing import Any, Final
 
 import numpy as np
-from numpy.typing import NDArray
-
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 

@@ -29,9 +29,11 @@ validation and is auto-approved on unvalidated fields.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field as dataclass_field
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import date
-from typing import Any, Callable, Final, Sequence
+from typing import Any, Final
 
 # Keywords this validator understands. Anything else in a schema is a hard error
 # rather than a silent pass — see the module docstring.
