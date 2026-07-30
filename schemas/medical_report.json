@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intake.example/schemas/medical_report.json",
+  "title": "medical_report",
+  "description": "Fields extracted from a clinical report. Note the deliberately narrow field set: this class carries the highest re-identification risk of the four, so only fields with a downstream processing need are extracted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["patient_reference", "report_date", "ordering_clinician", "specimen_type", "findings_summary"],
+  "properties": {
+    "patient_reference": {
+      "type": "string",
+      "description": "Pseudonymous patient identifier (MRN or study id). Never a patient name — the pipeline treats names as data to be dropped, not extracted.",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "report_date": {
+      "type": "string",
+      "description": "Date the report was issued, ISO 8601 date.",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "ordering_clinician": {
+      "type": "string",
+      "description": "Name of the clinician who ordered the investigation.",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "specimen_type": {
+      "type": "string",
+      "description": "What was examined.",
+      "enum": ["blood", "urine", "tissue", "imaging", "swab", "other"]
+    },
+    "findings_summary": {
+      "type": "string",
+      "description": "Free-text impression or conclusion section.",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "abnormal_flag": {
+      "type": ["boolean", "null"],
+      "description": "Whether the report records any out-of-reference-range result."
+    }
+  }
+}

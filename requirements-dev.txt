@@ -1,0 +1,12 @@
+-r requirements.txt
+
+# Registry / AWS control-plane calls. Not needed by the training container
+# itself — the training job is handed data and writes artifacts; it never calls
+# the SageMaker API. Keeping boto3 out of requirements.txt keeps the container
+# install minimal and makes the boundary explicit.
+boto3==1.35.54
+botocore==1.35.54
+
+pytest==8.3.3
+pytest-cov==6.0.0
+mypy==1.13.0

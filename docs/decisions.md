@@ -339,3 +339,178 @@ accept no tags at all, from either mechanism.
 **I'd flip this if:** the tag were genuinely uniform per root — which is the
 case in `infra/bootstrap`, and that root does put `component = state-backend`
 in `default_tags`.
+
+---
+
+# Decision log — M1 (Training, evaluation, registry)
+
+## The baseline artifact stores distributions, and deliberately not accuracy
+
+**Chose:** `baseline_statistics.json` carries prediction priors, document
+char-length and token-count distributions (quantiles **plus fixed histogram
+edges**), a confidence histogram, per-feature TF-IDF means and variances for the
+top 200 features, and training vocabulary size. It carries no F1 and no accuracy.
+
+**Over:** (a) storing the evaluation metrics in the same file, which is the
+obvious convenience; (b) storing only summary statistics without histogram edges;
+(c) storing all 20,000 feature moments.
+
+**Because:** drift is a change in a *distribution*, so a baseline holding scalars
+supports no drift test at all. Each element earns its place against a specific
+question M5 has to answer:
+
+- **prediction priors** → prediction drift, and the only signal available when
+  there is no ground truth, which is the normal production case.
+- **length/token distributions** → input drift, computable with no model at all,
+  so it still works when the endpoint is down.
+- **confidence histogram** → the concept-drift proxy. Confidence decaying while
+  inputs and predictions look stable means the world changed in a way the
+  features do not capture.
+- **per-feature moments** → lets drift be *attributed* to specific vocabulary
+  rather than only reported as "something moved".
+- **vocabulary size + coverage** → a TF-IDF model silently ignores unseen tokens,
+  so falling coverage means the model is going blind to its input while its
+  confidence stays high. Nothing else in the artifact reveals that.
+
+Keeping accuracy out is the important part. Mixing model-quality metrics into the
+drift reference invites exactly the mistake M5 must avoid — treating "the data
+changed" and "the model got worse" as one signal. They live in `metrics.json`.
+
+Histogram **edges are stored with the artifact** because recomputing bins from
+live data would compare two differently-binned distributions and manufacture
+drift from nothing.
+
+**I'd flip this if:** we moved to embedding-based drift, where the reference
+becomes centroids plus covariance rather than per-feature moments, and the
+per-feature table stops being meaningful.
+
+## Two registry versions differ by calibration, not by a different seed
+
+**Chose:** produce the second version by disabling probability calibration
+(`--no-calibration`).
+
+**Over:** changing the random seed, or the feature cap, to get two runs with
+slightly different numbers.
+
+**Because:** the deliverable asks for two *distinguishable* versions, and a
+difference that only shows up in the fourth decimal place of macro-F1 is
+indistinguishable from noise — it would not demonstrate that the registry
+captures anything meaningful. Calibration moves **ECE**, which is the metric the
+Route state's confidence threshold actually depends on, so the two versions
+differ in a way a reviewer can reason about: one is safe to gate auto-approval
+on, the other is not, at similar accuracy.
+
+**I'd flip this if:** the point were to demonstrate the retrain gate's *margin*
+logic rather than the registry, where a controlled macro-F1 delta is the more
+direct fixture.
+
+## Calibration is part of the model, not a post-hoc nicety
+
+**Chose:** wrap the linear classifier in `CalibratedClassifierCV` (isotonic,
+cv=3) inside the model implementation, and report ECE alongside F1.
+
+**Over:** shipping raw `LogisticRegression` probabilities and reporting accuracy
+only.
+
+**Because:** the intake Route state gates auto-approval on `max(predict_proba)`.
+Raw probabilities from a high-dimensional sparse TF-IDF fit are systematically
+overconfident, so an uncalibrated model auto-approves documents it should have
+escalated — and that failure surfaces as a *routing* bug, or as a rising human
+override rate, long before anyone suspects the model's probability scale. If a
+confidence threshold is load-bearing, its calibration is a correctness property,
+not a tuning detail.
+
+**I'd flip this if:** routing stopped depending on a probability (e.g. a
+learned-to-defer model that emits an explicit abstain class), at which point ECE
+stops being the metric that matters.
+
+## `predict_proba` is in the model interface, not optional
+
+**Chose:** the `DocumentClassifier` Protocol requires
+`fit / predict / predict_proba / save / load`.
+
+**Over:** a narrower `fit / predict` interface with probabilities as an optional
+capability discovered at runtime.
+
+**Because:** a model that cannot produce a probability cannot be dropped into
+this pipeline at all — the Route state has nothing to gate on. Making it optional
+would move that failure from "the swap does not type-check" to "the swap
+deployed and every document auto-approved". The interface should refuse the
+substitution up front.
+
+**I'd flip this if:** routing moved to a separate calibrator/deferral model, so
+the classifier genuinely only needed to emit a label.
+
+## Training-set and golden-set metrics are both kept, and both labelled
+
+**Chose:** `train.py` writes `metrics.json` with `"split": "train"` and
+`"is_held_out": false`; `evaluate.py` writes its own with `"split": "golden"` and
+`"is_held_out": true`. `register.py` **refuses** to attach anything that is not
+the golden-set variant.
+
+**Over:** (a) only emitting held-out metrics; (b) emitting both without
+distinguishing them.
+
+**Because:** training-set numbers are genuinely useful for "did this fit
+converge", so throwing them away loses debugging signal. But an unlabelled
+training-set macro-F1 sitting in a file called `metrics.json` is the easiest way
+to accidentally publish a fictional score — and the retrain gate reads exactly
+that field to decide whether a candidate beats the champion, so the consequence
+is a gate that silently stops meaning anything. The refusal in `register.py` is
+what makes the labelling load-bearing rather than advisory.
+
+## The snapshot id is a content hash, not a UUID or a timestamp
+
+**Chose:** `snapshot_id = sha256(canonical documents + generation parameters)`,
+recorded in `snapshot.json` and carried into the registry as
+`CustomerMetadataProperties.data_snapshot_id`.
+
+**Over:** a UUID or an ISO timestamp assigned at generation time.
+
+**Because:** the id has to *prove* two runs used the same input, and a UUID only
+records that someone generated data twice. With a content hash, an identical id
+means identical bytes and a changed document changes the id — which is what makes
+it a usable lineage key when someone asks "was this model trained on the data we
+think it was?". The generation parameters are hashed in too, so two corpora that
+coincidentally contain the same documents under different splits do not collide.
+
+**I'd flip this if:** the dataset grew large enough that hashing every document
+on each run became slow, at which point the hash would move to a manifest of
+per-file digests.
+
+## Seeds are derived with SHA-256, never with `hash()`
+
+**Chose:** derive every sub-seed via `sha256("|".join(repr(part)))`.
+
+**Over:** the shorter `random.Random(hash((seed, "split", i)))`.
+
+**Because:** Python randomises `str` and `bytes` hashing per process unless
+`PYTHONHASHSEED` is fixed. A tuple hash containing a string therefore produces
+*different* data in every new interpreter — while looking perfectly
+deterministic within a single test session. That would have silently broken the
+reproducibility the entire snapshot-id mechanism rests on, and the output would
+still have been valid-looking data, so nothing downstream would flag it. There is
+a test (`test_determinism_survives_a_fresh_interpreter`) that runs two
+subprocesses with `PYTHONHASHSEED=random` specifically to catch a regression
+here.
+
+**Found the hard way:** the first version of the generator used `hash()`.
+
+## Dependencies are pinned in-repo and installed into the training container
+
+**Chose:** pin exact versions in `requirements.txt`, ship it in the training
+job's `source_dir` so SageMaker pip-installs it, and record the *resolved*
+versions into `lineage.json` at run time.
+
+**Over:** relying on the managed SageMaker scikit-learn container's preinstalled
+versions.
+
+**Because:** "reproducible" has to mean the same versions resolve on a laptop and
+in the job, and a managed container's contents change between framework
+releases. Pinning states the intent; recording what actually resolved is what a
+reproduction attempt needs, because those two can differ and only the second is
+evidence.
+
+**I'd flip this if:** install time on cold container starts became the bottleneck,
+at which point the pins move into a custom image built in CI and referenced by
+digest — which is what M2 does for inference anyway.

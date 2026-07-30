@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intake.example/schemas/correspondence.json",
+  "title": "correspondence",
+  "description": "Fields extracted from general business correspondence — the catch-all class. Its extraction schema is deliberately the loosest of the four, because this class is where documents land when they are not one of the other three.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sender_name", "letter_date", "subject"],
+  "properties": {
+    "sender_name": {
+      "type": "string",
+      "description": "Person or organisation the letter is from.",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "recipient_name": {
+      "type": ["string", "null"],
+      "description": "Addressee, when the letter names one.",
+      "maxLength": 200
+    },
+    "letter_date": {
+      "type": "string",
+      "description": "Date on the letter, ISO 8601 date.",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "subject": {
+      "type": "string",
+      "description": "Subject or Re: line, or a one-line summary when the letter has neither.",
+      "minLength": 1,
+      "maxLength": 300
+    },
+    "reference_number": {
+      "type": ["string", "null"],
+      "description": "Any case, claim or account reference quoted in the letter.",
+      "maxLength": 64
+    },
+    "requires_response_by": {
+      "type": ["string", "null"],
+      "description": "Deadline the letter imposes, if any. ISO 8601 date.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    }
+  }
+}

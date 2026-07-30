@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://intake.example/schemas/invoice.json",
+  "title": "invoice",
+  "description": "Fields extracted from an invoice. Consumed by the Extract and Validate states of the intake state machine; the extraction prompt is generated from this schema, so adding a field here is the only change needed to extract it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["invoice_number", "total_amount", "currency", "due_date", "vendor_name"],
+  "properties": {
+    "invoice_number": {
+      "type": "string",
+      "description": "Vendor's own identifier for this invoice.",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "total_amount": {
+      "type": "number",
+      "description": "Grand total including tax, in the currency given by `currency`.",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string",
+      "description": "ISO 4217 three-letter code.",
+      "pattern": "^[A-Z]{3}$"
+    },
+    "due_date": {
+      "type": "string",
+      "description": "Payment due date, ISO 8601 date.",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "vendor_name": {
+      "type": "string",
+      "description": "Legal name of the issuing party.",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "purchase_order": {
+      "type": ["string", "null"],
+      "description": "Buyer's PO reference, when the invoice quotes one.",
+      "maxLength": 64
+    }
+  }
+}

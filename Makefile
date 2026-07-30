@@ -11,7 +11,8 @@ ifneq ($(filter-out dev staging,$(ENV)),)
 $(error ENV must be "dev" or "staging", got "$(ENV)")
 endif
 
-.PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all plan apply destroy test
+.PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
+        plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
 	@echo "Targets:"
@@ -23,6 +24,14 @@ help:
 	@echo "  make plan ENV=dev          terraform plan for one environment."
 	@echo "  make apply ENV=dev         terraform apply for one environment."
 	@echo "  make destroy ENV=dev       terraform destroy for one environment."
+	@echo ""
+	@echo "  make venv                  Create .venv and install pinned dependencies."
+	@echo "  make test                  Run the pytest suite."
+	@echo "  make typecheck             Run mypy in strict mode."
+	@echo "  make data                  Generate the synthetic dataset + snapshot id."
+	@echo "  make train                 Train, writing model + baseline + lineage."
+	@echo "  make evaluate              Score on the frozen golden set (the gate's numbers)."
+	@echo "  make two-versions          Produce the two distinguishable M1 registry versions."
 
 bootstrap:
 	cd $(BOOTSTRAP_DIR) && terraform init
@@ -100,5 +109,52 @@ destroy: init
 	@echo "      and still bills (~\$$0.23 prorated). This is AWS's floor."
 	@echo "      Run 'make destroy-bootstrap' once ALL environments are down."
 
-test:
-	@echo "No application tests exist yet (see tasks/M1+)."
+# --- Python (M1+) ----------------------------------------------------------
+VENV   := .venv
+PY     := $(VENV)/bin/python
+DATA_DIR ?= data/snapshot
+ARTIFACTS_DIR ?= artifacts
+
+$(VENV)/bin/python:
+	python3.12 -m venv $(VENV)
+	$(PY) -m pip install --quiet --upgrade pip
+	$(PY) -m pip install --quiet -r requirements-dev.txt
+
+venv: $(VENV)/bin/python
+
+test: venv
+	$(PY) -m pytest
+
+typecheck: venv
+	$(PY) -m mypy
+
+# Regenerate the dataset. Deterministic: same seed, same bytes, same snapshot id.
+data: venv
+	$(PY) -m src.data.generate --output-dir $(DATA_DIR)
+
+train: venv
+	$(PY) -m src.training.train \
+		--train-dir $(DATA_DIR) \
+		--model-dir $(ARTIFACTS_DIR)/model \
+		--output-dir $(ARTIFACTS_DIR)/output
+
+# The numbers that gate a release: held-out, on the frozen golden set.
+evaluate: venv
+	$(PY) -m src.training.evaluate \
+		--model-dir $(ARTIFACTS_DIR)/model \
+		--data-dir $(DATA_DIR) \
+		--output-dir $(ARTIFACTS_DIR)/evaluation
+
+# Produce the two distinguishable registry versions M1 is graded on. The second
+# run disables probability calibration, so the versions differ in ECE — the
+# metric the confidence gate actually depends on — rather than by random noise.
+two-versions: venv data
+	$(PY) -m src.training.train --train-dir $(DATA_DIR) \
+		--model-dir $(ARTIFACTS_DIR)/v1/model --output-dir $(ARTIFACTS_DIR)/v1/output
+	$(PY) -m src.training.evaluate --model-dir $(ARTIFACTS_DIR)/v1/model \
+		--data-dir $(DATA_DIR) --output-dir $(ARTIFACTS_DIR)/v1/evaluation
+	$(PY) -m src.training.train --train-dir $(DATA_DIR) --no-calibration \
+		--model-dir $(ARTIFACTS_DIR)/v2/model --output-dir $(ARTIFACTS_DIR)/v2/output
+	$(PY) -m src.training.evaluate --model-dir $(ARTIFACTS_DIR)/v2/model \
+		--data-dir $(DATA_DIR) --output-dir $(ARTIFACTS_DIR)/v2/evaluation \
+		--champion-metrics $(ARTIFACTS_DIR)/v1/evaluation/metrics.json

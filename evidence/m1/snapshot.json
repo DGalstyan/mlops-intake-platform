@@ -1,0 +1,19 @@
+{
+  "classes": [
+    "invoice",
+    "medical_report",
+    "id_document",
+    "correspondence"
+  ],
+  "counts": {
+    "golden": 240,
+    "shifted": 400,
+    "total": 1600,
+    "train": 1360
+  },
+  "docs_per_class": 400,
+  "generator_version": "1.1.0",
+  "golden_per_class": 60,
+  "seed": 20260730,
+  "snapshot_id": "sha256:0aba339dd3d872afd4295cb32d150f5e37d3d173259530c28f57f0cc93a5500d"
+}

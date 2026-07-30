@@ -1,0 +1,1129 @@
+{
+  "classes": [
+    "invoice",
+    "medical_report",
+    "id_document",
+    "correspondence"
+  ],
+  "confidence": {
+    "count": 1360,
+    "histogram_counts": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      19,
+      32,
+      34,
+      94,
+      1181
+    ],
+    "histogram_edges": [
+      0.0,
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "max": 1.0,
+    "mean": 0.958006060232176,
+    "min": 0.5013811231756543,
+    "p10": 0.8645985548705516,
+    "p50": 0.9948219866413384,
+    "p90": 1.0,
+    "std": 0.08649355635090378
+  },
+  "document_char_length": {
+    "count": 1360,
+    "histogram_counts": [
+      136,
+      807,
+      417,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "histogram_edges": [
+      0.0,
+      100.0,
+      200.0,
+      400.0,
+      600.0,
+      900.0,
+      1300.0,
+      1800.0,
+      2500.0,
+      4000.0,
+      1000000.0
+    ],
+    "max": 345.0,
+    "mean": 172.56470588235294,
+    "min": 69.0,
+    "p10": 99.9,
+    "p50": 162.0,
+    "p90": 261.0,
+    "std": 61.268024394040886
+  },
+  "document_token_count": {
+    "count": 1360,
+    "histogram_counts": [
+      596,
+      764,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "histogram_edges": [
+      0.0,
+      20.0,
+      40.0,
+      70.0,
+      100.0,
+      150.0,
+      220.0,
+      320.0,
+      480.0,
+      700.0,
+      1000000.0
+    ],
+    "max": 38.0,
+    "mean": 21.53529411764706,
+    "min": 10.0,
+    "p10": 12.0,
+    "p50": 20.0,
+    "p90": 34.0,
+    "std": 7.385613294576438
+  },
+  "lineage": {
+    "data_snapshot_id": "sha256:0aba339dd3d872afd4295cb32d150f5e37d3d173259530c28f57f0cc93a5500d",
+    "git_sha": "3198ebf84d40d5b20969f2cf0338a43225e5a3b5"
+  },
+  "prediction_priors": {
+    "correspondence": 0.24705882352941178,
+    "id_document": 0.25220588235294117,
+    "invoice": 0.25220588235294117,
+    "medical_report": 0.2485294117647059
+  },
+  "reference_set_size": 1360,
+  "schema_version": "1.0.0",
+  "top_feature_count": 200,
+  "top_features": [
+    {
+      "feature": "document",
+      "mean": 0.03542466813016046,
+      "variance": 6.347670851421044e-05
+    },
+    {
+      "feature": "reference",
+      "mean": 0.03473562922114482,
+      "variance": 0.0022498726791271746
+    },
+    {
+      "feature": "total",
+      "mean": 0.024046461281840553,
+      "variance": 0.001923788154164704
+    },
+    {
+      "feature": "copy",
+      "mean": 0.024040768617901928,
+      "variance": 0.001977098071522564
+    },
+    {
+      "feature": "please",
+      "mean": 0.022837308760941373,
+      "variance": 0.0017972503119683917
+    },
+    {
+      "feature": "authority",
+      "mean": 0.022810123616388497,
+      "variance": 0.0020304027165833497
+    },
+    {
+      "feature": "identity",
+      "mean": 0.022626483682664428,
+      "variance": 0.0021386449255287117
+    },
+    {
+      "feature": "regarding",
+      "mean": 0.02261407604433174,
+      "variance": 0.001766893906266517
+    },
+    {
+      "feature": "contact",
+      "mean": 0.02254667789124237,
+      "variance": 0.0017330941701359157
+    },
+    {
+      "feature": "attached",
+      "mean": 0.02228913792821418,
+      "variance": 0.0017937422659459745
+    },
+    {
+      "feature": "page",
+      "mean": 0.022207404482667743,
+      "variance": 0.001653119669550745
+    },
+    {
+      "feature": "subtotal",
+      "mean": 0.02219060826511419,
+      "variance": 0.0021047471777864302
+    },
+    {
+      "feature": "surname",
+      "mean": 0.022188596015378995,
+      "variance": 0.0020788565010183575
+    },
+    {
+      "feature": "billing",
+      "mean": 0.022169359753831896,
+      "variance": 0.0021011708242033994
+    },
+    {
+      "feature": "range",
+      "mean": 0.022143391410588898,
+      "variance": 0.0021612262156269
+    },
+    {
+      "feature": "vendor",
+      "mean": 0.022116026870629305,
+      "variance": 0.0019738494903414976
+    },
+    {
+      "feature": "address",
+      "mean": 0.022105303906876674,
+      "variance": 0.0017617438199178511
+    },
+    {
+      "feature": "haemoglobin",
+      "mean": 0.02210250635142585,
+      "variance": 0.002122386476214456
+    },
+    {
+      "feature": "faithfully",
+      "mean": 0.02202211283237899,
+      "variance": 0.00219876404051973
+    },
+    {
+      "feature": "zone",
+      "mean": 0.02200792670539074,
+      "variance": 0.0022107503740304473
+    },
+    {
+      "feature": "date",
+      "mean": 0.021961652697733376,
+      "variance": 0.0018292693521058103
+    },
+    {
+      "feature": "follow",
+      "mean": 0.02192728993261091,
+      "variance": 0.0020869746780513405
+    },
+    {
+      "feature": "diagnosis",
+      "mean": 0.021897714095492016,
+      "variance": 0.0022001404793350813
+    },
+    {
+      "feature": "acknowledge",
+      "mean": 0.02185988288270299,
+      "variance": 0.002067252872140144
+    },
+    {
+      "feature": "complaint",
+      "mean": 0.021844767388218965,
+      "variance": 0.002284254855301752
+    },
+    {
+      "feature": "abnormal",
+      "mean": 0.021837000069776864,
+      "variance": 0.002246195004289671
+    },
+    {
+      "feature": "expiry",
+      "mean": 0.02182902722841363,
+      "variance": 0.0022203467696107443
+    },
+    {
+      "feature": "readable",
+      "mean": 0.021806917669833382,
+      "variance": 0.002017027172649891
+    },
+    {
+      "feature": "payable",
+      "mean": 0.021791996214680056,
+      "variance": 0.002126992342152771
+    },
+    {
+      "feature": "quantity",
+      "mean": 0.02177023320143196,
+      "variance": 0.0020987978251084667
+    },
+    {
+      "feature": "nationality",
+      "mean": 0.021722340950923943,
+      "variance": 0.0022054973922172776
+    },
+    {
+      "feature": "holder",
+      "mean": 0.021676224443965733,
+      "variance": 0.0020615776178476916
+    },
+    {
+      "feature": "histology",
+      "mean": 0.0215437063457319,
+      "variance": 0.0020125166891267355
+    },
+    {
+      "feature": "machine",
+      "mean": 0.02152117512489068,
+      "variance": 0.002023393556533629
+    },
+    {
+      "feature": "sample",
+      "mean": 0.021501216081478,
+      "variance": 0.002107728400284597
+    },
+    {
+      "feature": "price",
+      "mean": 0.021432265924980938,
+      "variance": 0.0020977776885068005
+    },
+    {
+      "feature": "discussed",
+      "mean": 0.021428672203757222,
+      "variance": 0.00214498481078509
+    },
+    {
+      "feature": "response",
+      "mean": 0.02139878480368798,
+      "variance": 0.0020997243692880137
+    },
+    {
+      "feature": "referral",
+      "mean": 0.021390429356551627,
+      "variance": 0.002078890616200925
+    },
+    {
+      "feature": "amount",
+      "mean": 0.02132979148786229,
+      "variance": 0.0021513307744371168
+    },
+    {
+      "feature": "purchase",
+      "mean": 0.02131717792777491,
+      "variance": 0.0020098485360984493
+    },
+    {
+      "feature": "bank",
+      "mean": 0.021283528985493745,
+      "variance": 0.0019483964238712279
+    },
+    {
+      "feature": "tax",
+      "mean": 0.02127025756817985,
+      "variance": 0.0020227129008441123
+    },
+    {
+      "feature": "letter",
+      "mean": 0.021262951152337915,
+      "variance": 0.002228070954319989
+    },
+    {
+      "feature": "enquiry",
+      "mean": 0.021257890613618633,
+      "variance": 0.0021124627988392194
+    },
+    {
+      "feature": "arrangement",
+      "mean": 0.021239569642024662,
+      "variance": 0.0021580217368912537
+    },
+    {
+      "feature": "signature",
+      "mean": 0.021217157787774596,
+      "variance": 0.0022114994974607102
+    },
+    {
+      "feature": "result",
+      "mean": 0.02121680934943012,
+      "variance": 0.0019678961936547574
+    },
+    {
+      "feature": "birth",
+      "mean": 0.021181553774015267,
+      "variance": 0.002162447588335499
+    },
+    {
+      "feature": "recipient",
+      "mean": 0.021142778890242915,
+      "variance": 0.002048192656236817
+    },
+    {
+      "feature": "confirm",
+      "mean": 0.02109420226383398,
+      "variance": 0.0021018444065743396
+    },
+    {
+      "feature": "invoice",
+      "mean": 0.021086078031890648,
+      "variance": 0.0020726093855044907
+    },
+    {
+      "feature": "sender",
+      "mean": 0.021067321989444884,
+      "variance": 0.0021934479288386022
+    },
+    {
+      "feature": "findings",
+      "mean": 0.021036927783588698,
+      "variance": 0.0020465398948143
+    },
+    {
+      "feature": "net",
+      "mean": 0.020963852226013078,
+      "variance": 0.001915869389348214
+    },
+    {
+      "feature": "meeting",
+      "mean": 0.020939542500209605,
+      "variance": 0.00204780226948654
+    },
+    {
+      "feature": "clinician",
+      "mean": 0.0208994147180362,
+      "variance": 0.001961806651482334
+    },
+    {
+      "feature": "issuing",
+      "mean": 0.020751466821526857,
+      "variance": 0.001878769075999614
+    },
+    {
+      "feature": "due",
+      "mean": 0.02072244378786113,
+      "variance": 0.0020553744284986714
+    },
+    {
+      "feature": "patient",
+      "mean": 0.02071450618854322,
+      "variance": 0.001912005905567777
+    },
+    {
+      "feature": "passport",
+      "mean": 0.020701807383614095,
+      "variance": 0.0021208936796639384
+    },
+    {
+      "feature": "terms",
+      "mean": 0.02070145818423865,
+      "variance": 0.001920320977674658
+    },
+    {
+      "feature": "unit",
+      "mean": 0.020672003072155786,
+      "variance": 0.0020107493676007815
+    },
+    {
+      "feature": "names",
+      "mean": 0.020573651065131555,
+      "variance": 0.0018393276955799434
+    },
+    {
+      "feature": "laboratory",
+      "mean": 0.020521020931478357,
+      "variance": 0.0017988882459361092
+    },
+    {
+      "feature": "sincerely",
+      "mean": 0.02042662095868744,
+      "variance": 0.001964541949144903
+    },
+    {
+      "feature": "remittance",
+      "mean": 0.020382640325765127,
+      "variance": 0.002065101420311215
+    },
+    {
+      "feature": "vat",
+      "mean": 0.020379480826319026,
+      "variance": 0.0018353086806717402
+    },
+    {
+      "feature": "specimen",
+      "mean": 0.020210371147800055,
+      "variance": 0.0022130925325968558
+    },
+    {
+      "feature": "given",
+      "mean": 0.02019866729063965,
+      "variance": 0.001967949453888817
+    },
+    {
+      "feature": "licence",
+      "mean": 0.020157537067643106,
+      "variance": 0.0019989086906117073
+    },
+    {
+      "feature": "impression",
+      "mean": 0.02012158341492905,
+      "variance": 0.0019394552392429196
+    },
+    {
+      "feature": "notice",
+      "mean": 0.020081777458979745,
+      "variance": 0.001961801845910861
+    },
+    {
+      "feature": "order",
+      "mean": 0.020068884838999337,
+      "variance": 0.0018765550882702954
+    },
+    {
+      "feature": "collected",
+      "mean": 0.020033472393566815,
+      "variance": 0.0021671159447638746
+    },
+    {
+      "feature": "reference reference",
+      "mean": 0.0033575730054360817,
+      "variance": 0.0006995091177947982
+    },
+    {
+      "feature": "patient reference",
+      "mean": 0.00286956820576367,
+      "variance": 0.0004995498009452393
+    },
+    {
+      "feature": "readable nationality",
+      "mean": 0.002375574269879738,
+      "variance": 0.0004199307699451833
+    },
+    {
+      "feature": "copy reference",
+      "mean": 0.002321132711872945,
+      "variance": 0.0004462044656906967
+    },
+    {
+      "feature": "collected reference",
+      "mean": 0.0021799825913032143,
+      "variance": 0.0003463615539084596
+    },
+    {
+      "feature": "expiry identity",
+      "mean": 0.002157380159509796,
+      "variance": 0.00041841839540271783
+    },
+    {
+      "feature": "acknowledge enquiry",
+      "mean": 0.00215572789983046,
+      "variance": 0.0004100241216759766
+    },
+    {
+      "feature": "reference please",
+      "mean": 0.0021360172313170055,
+      "variance": 0.0003975788737961885
+    },
+    {
+      "feature": "sincerely recipient",
+      "mean": 0.002102802234838799,
+      "variance": 0.0003861253763554423
+    },
+    {
+      "feature": "zone surname",
+      "mean": 0.002088159380615732,
+      "variance": 0.00044429989569183564
+    },
+    {
+      "feature": "reference result",
+      "mean": 0.0020802069942759123,
+      "variance": 0.0003731188887562879
+    },
+    {
+      "feature": "vendor price",
+      "mean": 0.002078844349352816,
+      "variance": 0.0004272066727039893
+    },
+    {
+      "feature": "identity issuing",
+      "mean": 0.002075070641099602,
+      "variance": 0.00044025011346190566
+    },
+    {
+      "feature": "reference range",
+      "mean": 0.0020734563688791403,
+      "variance": 0.0004230753955955717
+    },
+    {
+      "feature": "range reference",
+      "mean": 0.0020726138321230537,
+      "variance": 0.00037422951724437755
+    },
+    {
+      "feature": "referral abnormal",
+      "mean": 0.0020259818424131944,
+      "variance": 0.00038120749201913507
+    },
+    {
+      "feature": "complaint arrangement",
+      "mean": 0.0019896996438063873,
+      "variance": 0.00034518414616343396
+    },
+    {
+      "feature": "vendor reference",
+      "mean": 0.001961034666134162,
+      "variance": 0.00036050186469798086
+    },
+    {
+      "feature": "date reference",
+      "mean": 0.0019455678353028343,
+      "variance": 0.00041780946705551394
+    },
+    {
+      "feature": "unit remittance",
+      "mean": 0.0019117858026862688,
+      "variance": 0.00036831863338740293
+    },
+    {
+      "feature": "contact authority",
+      "mean": 0.0019089767905850008,
+      "variance": 0.00039190870218533966
+    },
+    {
+      "feature": "surname readable",
+      "mean": 0.0018909585057350507,
+      "variance": 0.0004272998608137086
+    },
+    {
+      "feature": "surname reference",
+      "mean": 0.00187840768801815,
+      "variance": 0.00034662125438854867
+    },
+    {
+      "feature": "purchase reference",
+      "mean": 0.001872694978035142,
+      "variance": 0.0004192598402463909
+    },
+    {
+      "feature": "reference diagnosis",
+      "mean": 0.0018660454735569027,
+      "variance": 0.00029861676700743936
+    },
+    {
+      "feature": "nationality names",
+      "mean": 0.0018601560545983005,
+      "variance": 0.0004122284090721117
+    },
+    {
+      "feature": "names zone",
+      "mean": 0.0018524432689732942,
+      "variance": 0.0003793509171195734
+    },
+    {
+      "feature": "discussed reference",
+      "mean": 0.0018266028212818625,
+      "variance": 0.0004256758126878326
+    },
+    {
+      "feature": "names holder",
+      "mean": 0.0018231339313064087,
+      "variance": 0.0003527804496359818
+    },
+    {
+      "feature": "confirm letter",
+      "mean": 0.001821158881339006,
+      "variance": 0.00036861024612843546
+    },
+    {
+      "feature": "confirm sincerely",
+      "mean": 0.0018044538598634204,
+      "variance": 0.00036277487597711567
+    },
+    {
+      "feature": "discussed surname",
+      "mean": 0.001803232361313441,
+      "variance": 0.00035125240597938474
+    },
+    {
+      "feature": "follow acknowledge",
+      "mean": 0.0018030470224340404,
+      "variance": 0.00032074073378177695
+    },
+    {
+      "feature": "readable reference",
+      "mean": 0.0018004601738681497,
+      "variance": 0.00035321095923712974
+    },
+    {
+      "feature": "bank billing",
+      "mean": 0.0017995187624151327,
+      "variance": 0.00030035394662433887
+    },
+    {
+      "feature": "copy faithfully",
+      "mean": 0.0017972843206735339,
+      "variance": 0.00031662174389739616
+    },
+    {
+      "feature": "price amount",
+      "mean": 0.0017929617678248025,
+      "variance": 0.0003551475542462538
+    },
+    {
+      "feature": "diagnosis range",
+      "mean": 0.001781514250370912,
+      "variance": 0.000315721436201763
+    },
+    {
+      "feature": "licence authority",
+      "mean": 0.001780125667841219,
+      "variance": 0.0004119001039371404
+    },
+    {
+      "feature": "referral reference",
+      "mean": 0.0017768442650772493,
+      "variance": 0.00035129096831550464
+    },
+    {
+      "feature": "reference birth",
+      "mean": 0.0017617202815069944,
+      "variance": 0.000448968871384956
+    },
+    {
+      "feature": "licence names",
+      "mean": 0.001761144436362272,
+      "variance": 0.0004296498830747261
+    },
+    {
+      "feature": "purchase subtotal",
+      "mean": 0.0017606026788401612,
+      "variance": 0.0004385626686667026
+    },
+    {
+      "feature": "acknowledge follow",
+      "mean": 0.0017526605374060674,
+      "variance": 0.000439781449386592
+    },
+    {
+      "feature": "reference confirm",
+      "mean": 0.0017521101315139643,
+      "variance": 0.0003556948167011812
+    },
+    {
+      "feature": "reference surname",
+      "mean": 0.001740817874718929,
+      "variance": 0.0003834355940349765
+    },
+    {
+      "feature": "acknowledge reference",
+      "mean": 0.0017374624158367122,
+      "variance": 0.00035709334251813273
+    },
+    {
+      "feature": "reference patient",
+      "mean": 0.0017292166767781335,
+      "variance": 0.0002952491534454718
+    },
+    {
+      "feature": "reference acknowledge",
+      "mean": 0.001722719593027439,
+      "variance": 0.00035202310422960474
+    },
+    {
+      "feature": "response notice",
+      "mean": 0.001719845254724045,
+      "variance": 0.0004240614581644526
+    },
+    {
+      "feature": "reference regarding",
+      "mean": 0.001714985627391222,
+      "variance": 0.00035142250943864085
+    },
+    {
+      "feature": "arrangement arrangement",
+      "mean": 0.0017149477013609438,
+      "variance": 0.0003594861731263131
+    },
+    {
+      "feature": "payable due",
+      "mean": 0.0017077759206227414,
+      "variance": 0.0003352108315682678
+    },
+    {
+      "feature": "vat terms",
+      "mean": 0.001707277999800743,
+      "variance": 0.0003362320309595547
+    },
+    {
+      "feature": "address reference",
+      "mean": 0.0017064982376281388,
+      "variance": 0.00031081418365263186
+    },
+    {
+      "feature": "discussed recipient",
+      "mean": 0.0017041670213435388,
+      "variance": 0.0003151828682038394
+    },
+    {
+      "feature": "patient haemoglobin",
+      "mean": 0.0017025325004479622,
+      "variance": 0.0003167288902990013
+    },
+    {
+      "feature": "reference sample",
+      "mean": 0.0017021590627149742,
+      "variance": 0.00033073055483302566
+    },
+    {
+      "feature": "result reference",
+      "mean": 0.0016960697179421048,
+      "variance": 0.0003746401084409607
+    },
+    {
+      "feature": "tax purchase",
+      "mean": 0.0016957261769593621,
+      "variance": 0.00038394130563694083
+    },
+    {
+      "feature": "machine reference",
+      "mean": 0.001692496097794225,
+      "variance": 0.00033515245123540903
+    },
+    {
+      "feature": "quantity payable",
+      "mean": 0.0016873039486464466,
+      "variance": 0.00030923404366239946
+    },
+    {
+      "feature": "impression reference",
+      "mean": 0.001686667928902651,
+      "variance": 0.0003365516956156802
+    },
+    {
+      "feature": "contact reference",
+      "mean": 0.0016788126708197344,
+      "variance": 0.0003012834630164683
+    },
+    {
+      "feature": "identity reference",
+      "mean": 0.0016763993119246884,
+      "variance": 0.0003003965416129987
+    },
+    {
+      "feature": "arrangement enquiry",
+      "mean": 0.001675354787437301,
+      "variance": 0.000333937017522311
+    },
+    {
+      "feature": "discussed discussed",
+      "mean": 0.0016723876180017498,
+      "variance": 0.00032967907355419934
+    },
+    {
+      "feature": "price price",
+      "mean": 0.0016700015868113117,
+      "variance": 0.00045342386574808867
+    },
+    {
+      "feature": "reference complaint",
+      "mean": 0.0016659299023986222,
+      "variance": 0.00032441703048658805
+    },
+    {
+      "feature": "referral collected",
+      "mean": 0.0016652768381889497,
+      "variance": 0.0003311658896729768
+    },
+    {
+      "feature": "haemoglobin reference",
+      "mean": 0.0016637326977220555,
+      "variance": 0.00029669175505091103
+    },
+    {
+      "feature": "quantity reference",
+      "mean": 0.0016608900654615825,
+      "variance": 0.00032140325807595774
+    },
+    {
+      "feature": "reference readable",
+      "mean": 0.0016593078288120475,
+      "variance": 0.0003316742206297041
+    },
+    {
+      "feature": "quantity subtotal",
+      "mean": 0.0016580958328913326,
+      "variance": 0.0003669678511924471
+    },
+    {
+      "feature": "reference clinician",
+      "mean": 0.0016577302010854146,
+      "variance": 0.0002916402948528795
+    },
+    {
+      "feature": "specimen sample",
+      "mean": 0.001657418975212777,
+      "variance": 0.0003621016096525759
+    },
+    {
+      "feature": "due invoice",
+      "mean": 0.001650172345264442,
+      "variance": 0.00036962243253253985
+    },
+    {
+      "feature": "reference arrangement",
+      "mean": 0.001647475778722857,
+      "variance": 0.0003172164311192512
+    },
+    {
+      "feature": "complaint response",
+      "mean": 0.0016463435755201385,
+      "variance": 0.00031449228746145496
+    },
+    {
+      "feature": "remittance bank",
+      "mean": 0.001645049907428177,
+      "variance": 0.000322422467699081
+    },
+    {
+      "feature": "meeting reference",
+      "mean": 0.00163225905350808,
+      "variance": 0.0003410666402136228
+    },
+    {
+      "feature": "notice complaint",
+      "mean": 0.0016311568972508996,
+      "variance": 0.00038623866963034153
+    },
+    {
+      "feature": "reference enquiry",
+      "mean": 0.0016311539366776445,
+      "variance": 0.0003094153985511608
+    },
+    {
+      "feature": "copy acknowledge",
+      "mean": 0.0016308892627503136,
+      "variance": 0.0003396893406795094
+    },
+    {
+      "feature": "please reference",
+      "mean": 0.0016291735503226195,
+      "variance": 0.00034292467165689594
+    },
+    {
+      "feature": "confirm enquiry",
+      "mean": 0.001624235835522508,
+      "variance": 0.00031139183016878284
+    },
+    {
+      "feature": "range attached",
+      "mean": 0.0016157844375247088,
+      "variance": 0.00031587734022694265
+    },
+    {
+      "feature": "reference collected",
+      "mean": 0.0016138813176805587,
+      "variance": 0.00028559976598114786
+    },
+    {
+      "feature": "letter sender",
+      "mean": 0.0016126424830923986,
+      "variance": 0.00030492300816574897
+    },
+    {
+      "feature": "impression abnormal",
+      "mean": 0.0016113932101817898,
+      "variance": 0.0003727818161170713
+    },
+    {
+      "feature": "contact machine",
+      "mean": 0.0016096703421874022,
+      "variance": 0.00032378220903955395
+    },
+    {
+      "feature": "expiry given",
+      "mean": 0.0016070672775069764,
+      "variance": 0.00027135640093469207
+    },
+    {
+      "feature": "reference remittance",
+      "mean": 0.0016069061191686502,
+      "variance": 0.0002750785697343263
+    },
+    {
+      "feature": "identity surname",
+      "mean": 0.0016042567798177313,
+      "variance": 0.00029929441286523817
+    },
+    {
+      "feature": "signature nationality",
+      "mean": 0.001600196776821815,
+      "variance": 0.0002997826808833665
+    },
+    {
+      "feature": "billing vendor",
+      "mean": 0.0016000215279660997,
+      "variance": 0.00033221191646464897
+    },
+    {
+      "feature": "enquiry sincerely",
+      "mean": 0.0015998735102181415,
+      "variance": 0.0002725629385253951
+    },
+    {
+      "feature": "nationality zone",
+      "mean": 0.0015981256466323832,
+      "variance": 0.0003343227688773605
+    },
+    {
+      "feature": "amount invoice",
+      "mean": 0.001590368703192806,
+      "variance": 0.0003262570827393664
+    },
+    {
+      "feature": "clinician sample",
+      "mean": 0.0015789104854899674,
+      "variance": 0.00029546701694406263
+    },
+    {
+      "feature": "subtotal net",
+      "mean": 0.0015774756367186256,
+      "variance": 0.0003216111551353942
+    },
+    {
+      "feature": "enquiry reference",
+      "mean": 0.0015764366588597446,
+      "variance": 0.0002915819759358908
+    },
+    {
+      "feature": "sender confirm",
+      "mean": 0.0015699133207815108,
+      "variance": 0.00028806357074526076
+    },
+    {
+      "feature": "machine signature",
+      "mean": 0.0015655634091253298,
+      "variance": 0.0003374981068019752
+    },
+    {
+      "feature": "invoice purchase",
+      "mean": 0.0015633026451536568,
+      "variance": 0.0003082334877510394
+    },
+    {
+      "feature": "billing terms",
+      "mean": 0.0015626474957562639,
+      "variance": 0.0003479690536316516
+    },
+    {
+      "feature": "zone nationality",
+      "mean": 0.0015582913933802757,
+      "variance": 0.00035164646894660686
+    },
+    {
+      "feature": "reference referral",
+      "mean": 0.001557502974738536,
+      "variance": 0.00028931483763755815
+    },
+    {
+      "feature": "notice reference",
+      "mean": 0.0015561106091241277,
+      "variance": 0.00034595478841934954
+    },
+    {
+      "feature": "sincerely address",
+      "mean": 0.0015559402047575336,
+      "variance": 0.00031267660929720667
+    },
+    {
+      "feature": "passport authority",
+      "mean": 0.0015542416124725916,
+      "variance": 0.0003457246956720835
+    },
+    {
+      "feature": "diagnosis reference",
+      "mean": 0.001549999344383786,
+      "variance": 0.0003076057159484583
+    },
+    {
+      "feature": "identity patient",
+      "mean": 0.0015493205004143758,
+      "variance": 0.00034694492807036136
+    },
+    {
+      "feature": "invoice payable",
+      "mean": 0.0015490735590136691,
+      "variance": 0.00028038210251357654
+    },
+    {
+      "feature": "net order",
+      "mean": 0.0015465327139585904,
+      "variance": 0.00029278662132314534
+    },
+    {
+      "feature": "reference follow",
+      "mean": 0.001542774044159127,
+      "variance": 0.0003097732687298843
+    },
+    {
+      "feature": "tax invoice",
+      "mean": 0.0015410298559287142,
+      "variance": 0.0002749770971947298
+    },
+    {
+      "feature": "attached range",
+      "mean": 0.0015370207264798375,
+      "variance": 0.00030310484738428004
+    },
+    {
+      "feature": "billing amount",
+      "mean": 0.0015339572433107408,
+      "variance": 0.0003355022479932514
+    },
+    {
+      "feature": "bank purchase",
+      "mean": 0.00152531391303242,
+      "variance": 0.000293912693904126
+    },
+    {
+      "feature": "reference identity",
+      "mean": 0.0015243150562883172,
+      "variance": 0.00030171218458934206
+    },
+    {
+      "feature": "abnormal address",
+      "mean": 0.0015222530211146292,
+      "variance": 0.00032369896100060296
+    },
+    {
+      "feature": "birth authority",
+      "mean": 0.001521989803461324,
+      "variance": 0.0002956431078580631
+    },
+    {
+      "feature": "collected impression",
+      "mean": 0.001519193607090496,
+      "variance": 0.0002880531393258954
+    },
+    {
+      "feature": "nationality machine",
+      "mean": 0.0015177067167697546,
+      "variance": 0.00032657609575572624
+    }
+  ],
+  "vocabulary_size": 5087
+}

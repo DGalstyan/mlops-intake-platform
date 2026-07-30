@@ -23,7 +23,7 @@ been written yet, and no AWS resource has ever been applied from this repo.
 | Milestone | Status | What exists |
 |---|---|---|
 | **M0** Foundations (IaC) | **Code complete, never applied** | `infra/` — state backend, KMS, ECR, 4 buckets, per-component IAM. `terraform validate` + `fmt` clean on all three roots. |
-| M1 Training + Registry | Not started | — |
+| **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | M2 Deployment | Not started | — |
 | M3 Orchestration + HITL | Not started | — |
 | M4 Observability | Not started | — |
@@ -103,6 +103,25 @@ tasks/           milestone breakdown M0-M7
   bucket name from your account id.
 - No other manual step. No console clicks.
 
+### The model side (no AWS needed)
+
+Everything in M1 runs locally, which is deliberate — the training and evaluation
+code is a plain Python package that SageMaker happens to invoke, not something
+that only works inside a job.
+
+```bash
+make venv            # .venv with pinned dependencies (Python 3.12)
+make test            # 96 tests
+make typecheck       # mypy --strict, clean
+make data            # deterministic corpus + content-addressed snapshot id
+make two-versions    # the M1 deliverable: two distinguishable registry versions
+```
+
+`make two-versions` reproduces the numbers in `evidence/m1/two-versions.md`
+exactly, from the seed in `src/config.py`.
+
+### Infrastructure
+
 ```bash
 # 1. Create the remote state backend. Local state, run once.
 #    If your account already federates GitHub Actions, add
@@ -155,6 +174,82 @@ aws resourcegroupstaggingapi get-resources --tag-filters Key=project,Values=inta
 ```
 
 ---
+
+## The model, its metrics, and the baseline artifact
+
+### Accuracy is a non-goal, so here is what the numbers are for
+
+The classifier is TF-IDF + multinomial logistic regression, probability-calibrated
+with cross-validated isotonic regression. On the frozen 240-document golden set it
+scores **macro-F1 0.9417, ECE 0.0140**.
+
+The synthetic generator is deliberately tuned so this is *not* higher. An earlier
+version put the class name in each document's header; the model read the label
+straight off the text and scored macro-F1 1.00 with ECE 0.0003 and every
+confidence pinned at 1.0. That looks like success and is worthless — with a
+perfect classifier, calibration has nothing to measure, the Route state's
+confidence threshold can never fire, the human-review queue stays empty, and the
+drift demo has no headroom to move. A too-easy dataset silently guts M3, M4 and
+M5. The term-mixture weights in `src/data/generate.py` were swept against
+held-out macro-F1 and the fraction of documents falling below the auto-approve
+threshold; the chosen point puts ~12% of documents into human review.
+
+### Which metrics measure model quality vs. system health
+
+`metrics.json` is written twice, and the difference matters:
+
+- `train.py` writes it with `"split": "train"`, `"is_held_out": false`. These are
+  convergence-debugging numbers. They are *not* a quality claim.
+- `evaluate.py` writes it with `"split": "golden"`, `"is_held_out": true`. These
+  gate releases and feed the retrain comparison.
+
+`register.py` **refuses** to attach anything that is not the golden variant, so
+the labelling is load-bearing rather than advisory. The full model-quality vs
+system-health discussion belongs to M4 and is not written yet.
+
+### Calibration is a correctness property here, not a tuning detail
+
+The two registry versions make the point better than prose: v2 (calibration
+disabled) is **more accurate** than v1 — macro-F1 0.9543 vs 0.9417 — while its
+ECE is **19× worse**, 0.2622 vs 0.0140. Since the Route state gates auto-approval
+on `max(predict_proba)`, v2 would confidently auto-approve documents it should
+have escalated, while winning on every accuracy-shaped metric. Choosing v2 on
+macro-F1 alone is exactly the mistake this pair exists to expose.
+
+### What is in the baseline statistics artifact, and why
+
+`baseline_statistics.json` is the reference the M5 drift job compares production
+traffic against. It is versioned (`schema_version`), and `load_baseline()` refuses
+a major version it does not recognise — a drift job that silently reads a shape it
+does not understand reports numbers computed against the wrong fields, which is
+worse than not running at all.
+
+| Contents | Drift question it answers |
+|---|---|
+| Per-class prediction priors | **Prediction drift.** The only signal available with no ground truth, which is the normal production case. |
+| Document char-length + token-count distributions, with **fixed histogram edges** | **Input drift.** Needs no model, so it still works when the endpoint is down. |
+| Confidence histogram | **Concept-drift proxy.** Confidence decaying while inputs and predictions look stable means the world changed in a way the features do not capture. |
+| Per-feature TF-IDF means and variances (top 200) | Lets drift be **attributed** to specific vocabulary rather than reported as "something moved". |
+| Vocabulary size | A TF-IDF model silently ignores unseen tokens, so falling coverage means it is going blind to its input while confidence stays high. Nothing else reveals that. |
+
+Two deliberate omissions:
+
+- **Histogram edges travel with the artifact.** Recomputing bins from live data
+  would compare two differently-binned distributions and manufacture drift out of
+  nothing.
+- **No accuracy or F1.** Those are properties of a model scored against labels
+  and live in `metrics.json`. Mixing them in here invites the precise mistake M5
+  must avoid: treating "the data changed" and "the model got worse" as one
+  signal.
+
+### Lineage
+
+Every registered version carries the data snapshot id (a **content hash** of the
+exact training bytes, not a UUID — so an identical id proves identical input), the
+git SHA, the training image digest, and the resolved dependency versions. Missing
+values are recorded as the explicit string `unknown` rather than defaulted,
+because only an explicit unknown is detectable in review. Locally the image digest
+is legitimately unknown and training prints a warning saying so.
 
 ## Cost
 
@@ -242,6 +337,30 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M1 specifically**
+
+- **Nothing has run on SageMaker.** `train.py` and `evaluate.py` implement the
+  script-mode and Processing-job contracts (SM_CHANNEL_TRAIN, SM_MODEL_DIR,
+  SM_OUTPUT_DATA_DIR) and run correctly locally, but no training job has been
+  submitted, so no `model.tar.gz` exists in S3 and **no version has actually been
+  written to a Model Package Group.** `register.py` has only been exercised
+  `--dry-run`. The two-versions deliverable is proven as far as metrics and the
+  registration payload; the registry API call itself is unverified.
+- **The retrain gate does not read ECE.** It gates on macro-F1 margin plus a
+  per-class floor. In the v1/v2 pair above it blocked the badly-calibrated
+  candidate — but on the *margin*, incidentally, not because it noticed the
+  calibration collapse. A candidate that improved macro-F1 by 0.03 while wrecking
+  ECE would pass. Adding a calibration ceiling to the gate is the obvious fix and
+  is not done.
+- **`GATE_MIN_MACRO_F1_IMPROVEMENT = 0.02` is asserted, not derived.** It should
+  come from the measured run-to-run variance on a 240-document golden set. I have
+  not measured that variance, so the number is a plausible guess.
+- **The golden set is synthetic and drawn from the same generator as training.**
+  It is genuinely held out and non-overlap is asserted, but it is not an
+  independent sample of the real world, so the absolute scores mean little. The
+  *relative* comparison between versions is what the gate uses and that remains
+  valid.
 
 **Known-incomplete by design**
 

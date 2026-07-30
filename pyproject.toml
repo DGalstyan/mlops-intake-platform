@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intake-platform"
+version = "0.1.0"
+description = "Document-intake MLOps platform"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+# `pythonpath = ["."]` rather than an installed package: the SageMaker training
+# job runs these modules as scripts from a copied source_dir, not from a wheel,
+# so imports have to work from the repo root. Keeping the test path resolution
+# identical to the runtime one means a test cannot pass against an import layout
+# the training job does not have.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = [
+    # Fail on unexpected warnings; scikit-learn's convergence and deprecation
+    # warnings are exactly the signal we want surfaced rather than scrolled past.
+    "error",
+    # cv=3 isotonic calibration on a small per-class sample legitimately warns.
+    "ignore::UserWarning:sklearn.calibration",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "tests"]
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+# scikit-learn, joblib and scipy ship no type information. Silencing per-import
+# rather than globally disabling untyped-import errors, so a *new* untyped
+# dependency shows up as an error instead of being absorbed silently.
+[[tool.mypy.overrides]]
+module = ["sklearn.*", "joblib.*", "scipy.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/__init__.py"]

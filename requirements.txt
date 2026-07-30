@@ -1,0 +1,12 @@
+# Runtime dependencies for training, evaluation and the drift job.
+#
+# Pinned exactly, not loosely: the training job's reproducibility claim depends
+# on the same versions resolving inside the SageMaker container as on a laptop.
+# SageMaker script mode pip-installs this file from `source_dir` before running
+# train.py, so the container's own preinstalled scikit-learn is overridden by
+# these pins rather than silently used. The resolved versions are recorded into
+# the model artifact's metadata at train time (see src/training/lineage.py).
+numpy==2.1.3
+scikit-learn==1.5.2
+scipy==1.14.1
+joblib==1.4.2
