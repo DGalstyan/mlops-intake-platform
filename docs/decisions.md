@@ -683,3 +683,183 @@ more than version symmetry.
 **Not verified:** the image has never been built. `docker build` hung on this
 machine and the daemon became unresponsive; the build was abandoned rather than
 retried indefinitely. See the README's known gaps.
+
+---
+
+# Decision log — M3 (Orchestration & human-in-the-loop)
+
+## Two Lambdas in the workflow, and both earn their place
+
+**Chose:** direct SDK integrations for Textract, SageMaker Runtime, Bedrock, DynamoDB
+and SQS. Exactly two Lambdas inside the state machine, plus one outside it:
+
+1. `NormalizeOcr` — Textract returns a block *graph*. Assembling reading-order text
+   requires sorting blocks by geometry with row banding and joining them; ASL cannot
+   sort an array of objects by a nested numeric field. It also computes the content
+   hash and the char/line counts M4 turns into metrics.
+2. `ValidateExtraction` — JSON Schema validation and cross-field rules. A Choice
+   state can compare two values; it cannot evaluate a regex, an enum, or
+   "expiry_date must be after date_of_birth".
+3. The review API, which is outside the state machine because it is an HTTP endpoint.
+
+**Over:** the conventional shape, where a Lambda sits in front of each service call
+to marshal its request and response.
+
+**Because:** glue-only Lambdas are named as a point-loser, and rightly — each one is
+a cold start, a log group, an IAM role, a deployment artifact and a place for the
+retry policy to be subtly different. Two things fell out of removing them that I did
+not expect:
+
+- **Routing needed no Lambda at all.** Confidence and business-rule routing are two
+  Choice states. The endpoint returns its own `auto_approve_eligible` boolean,
+  computed against the config threshold, so the ASL compares a boolean rather than
+  duplicating the number — and there is a test asserting the ASL contains no
+  hardcoded threshold.
+- **The extraction prompt needed no Lambda either.** Prompts are rendered from
+  `schemas/*.json` at deploy time into DynamoDB and read with a direct GetItem. So
+  adding a field, or a whole document class, touches one JSON file and nothing else.
+
+**I'd flip this if:** a step needed genuine branching logic over a payload — at which
+point a Lambda is honest and a 12-state ASL detour is not.
+
+## Idempotency is claimed before anything billable, and guards three writes
+
+**Chose:** a conditional `PutItem` on a ledger table keyed by
+`bucket#key#versionId`, as the **first** state in the workflow. Plus conditional
+writes on the result and on the review task. Plus a deterministic execution name
+derived from the same key.
+
+**Over:** (a) checking for an existing result at the end; (b) relying on the
+execution-name dedupe alone.
+
+**Because:** each layer catches what the others miss. The execution name stops most
+duplicates before an execution starts, but only within its dedupe window. The ledger
+claim catches the rest — and because it runs first, a duplicate costs one DynamoDB
+write instead of a Textract call plus an endpoint invocation plus a Bedrock call.
+The conditional write on the *review task* is the one that is easy to forget and is
+called out explicitly in the assignment: two review tasks for one document wastes a
+human's time and produces two conflicting corrections.
+
+A duplicate ends in a `Succeed`, not a `Fail`. Duplicate S3 deliveries are routine,
+and failing them would put a permanent error rate on the state machine's metrics and
+make a real failure impossible to see.
+
+**No TTL on the ledger, deliberately.** Expiring an idempotency record re-opens the
+duplicate window for any redelivery after the TTL. The entries are ~200 bytes each;
+trading correctness for that storage would be a bad deal.
+
+**I'd flip this if:** documents were legitimately reprocessable — a "reprocess this
+document with the new model" flow would need the key to include a processing
+generation, not just the object version.
+
+## The dead-letter path only reads fields that are seeded up front
+
+**Chose:** a `Prepare` state that seeds empty `ocr` and `classification` objects
+before anything can fail.
+
+**Over:** letting the dead-letter state read those paths directly, which is what the
+first revision did.
+
+**Because:** JSONPath references to absent fields fail the state. So a failure during
+OCR would have failed the dead-letter write *too* — losing the document at exactly
+the moment the dead-letter path is the only thing that could save it. This was a real
+bug in the first version of the ASL, caught by writing a test that walks every
+`MessageBody` reference and checks it against the seeded set rather than by reading
+the definition.
+
+**I'd flip this if:** the workflow moved to JSONata, where a missing-path expression
+evaluates to nothing rather than erroring.
+
+## Extraction failure sends the document to review; it does not dead-letter it
+
+**Chose:** Bedrock failure after all retries routes to `ExtractionUnavailable` and
+then into the human-review queue with an empty field set and the reason.
+
+**Over:** dead-lettering the document, which is what every other terminal failure
+does.
+
+**Because:** classification already succeeded, so there is a usable partial result
+and a human can supply the fields by reading the document. Discarding it would throw
+away work that was already paid for, and it is the difference between "Bedrock was
+throttled for ten minutes" and "we lost the document". The same reasoning makes an
+unparseable model response a *validation failure* rather than a Lambda error.
+
+**I'd flip this if:** review capacity were the binding constraint, where flooding the
+queue during a Bedrock outage would be worse than deferring the documents — at which
+point the right answer is a retry queue, not a dead letter.
+
+## The review API never accepts a task token from the caller
+
+**Chose:** the API takes `correlation_id` and looks the task token up from the review
+table.
+
+**Over:** accepting the token in the request body, which is simpler and is what the
+task-token examples usually show.
+
+**Because:** a task token is a capability. Whoever holds one can resume that execution
+with arbitrary output — including a corrected class that becomes a training label.
+Accepting a caller-supplied token would let anyone who obtained or guessed one inject
+a correction into any document in flight. There is a test asserting a
+caller-supplied token is ignored.
+
+Related: `prediction_was_correct` is computed by comparing the correction to the
+stored prediction, never submitted. M5 uses the override rate as its concept-drift
+proxy, and a self-reported number would make that signal meaningless.
+
+**I'd flip this if:** the reviewer UI were a trusted server-side component holding
+its own credentials — but it would still be the wrong shape, because looking the
+token up costs one GetItem and removes the whole class of problem.
+
+## The correction is persisted before the result
+
+**Chose:** `PersistCorrection` runs before `StoreReviewedResult`, and the review is
+marked complete only after `SendTaskSuccess` returns.
+
+**Over:** the more natural order of storing the outcome first.
+
+**Because:** the reviewer's labour is the harder thing to recreate. A document can be
+redelivered; a human's judgement cannot be recovered if it is dropped. And marking
+the review complete before resuming the execution would leave a review closed while
+the execution still waited — it would eventually time out and dead-letter a document
+a human had already fixed. Both orderings have tests.
+
+## A hand-rolled JSON Schema validator, with a hard failure on unknown keywords
+
+**Chose:** implement the subset of Draft 2020-12 these four schemas use, and raise
+`NotImplementedError` on any keyword outside that subset.
+
+**Over:** (a) adding the `jsonschema` package to the Lambda bundle; (b) implementing
+the subset and ignoring unknown keywords, which is the usual shortcut.
+
+**Because:** the subset is small and fully enumerated, and the schemas are ours. But
+option (b) is genuinely dangerous: a validator that silently skips a keyword it does
+not understand reports a document as valid on fields it never checked, and that
+document is then auto-approved. Failing loudly means the failure surfaces in CI when
+someone adds a `$ref`, not in production as an unexplained auto-approval.
+
+**I'd flip this if:** the schemas needed `$ref`, `allOf`/`oneOf`, or conditional
+subschemas — at which point this should be *replaced* by the real library, not
+extended.
+
+## The traces are from a simulation, and the tests are what make them credible
+
+**Chose:** build `scripts/simulate_intake.py`, which runs the real handlers,
+validator, routing conditions and classifier against stubbed AWS boundaries, and
+produces the two required traces.
+
+**Over:** (a) shipping M3 with no evidence at all until credentials exist;
+(b) hand-writing plausible-looking trace files.
+
+**Because:** (b) is fabrication. (a) leaves the routing logic, the validator, the
+correction flow and the idempotency semantics entirely unexercised — none of which
+need AWS to be wrong. The simulation catches real bugs: it is how the `note` KeyError
+in `build_task_output` and the dead-letter seeding bug were found.
+
+The risk of a simulation is that it diverges from what deploys, at which point the
+traces are evidence of something that does not exist. That is why
+`TestSimulatorMatchesAsl` asserts the simulator and the ASL agree on the always-review
+class set, the three review-reason markers, and the *order* in which `DecideOutcome`
+evaluates its conditions.
+
+**Stated plainly:** this is not the deliverable. The deliverable is a Step Functions
+execution history. This is the closest honest substitute, and the README says so.

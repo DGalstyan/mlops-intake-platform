@@ -13,6 +13,7 @@ endif
 
 .PHONY: help bootstrap destroy-bootstrap init fmt fmt-check validate validate-all \
         measure-throughput docker-build docker-smoke resolve-approved smoke-test \
+        simulate-intake prompts \
         plan apply destroy venv test typecheck data train evaluate two-versions
 
 help:
@@ -191,3 +192,16 @@ resolve-approved: venv
 smoke-test: venv
 	$(PY) scripts/smoke_test.py --endpoint-name $(ENDPOINT_NAME) --region $(REGION) \
 		--require-confidence-spread
+
+# --- M3 orchestration ------------------------------------------------------
+# Run the intake flow locally and regenerate the traces in evidence/m3/.
+# Uses the real handlers, validator, routing conditions and classifier; stubs
+# Textract, Bedrock, DynamoDB and Step Functions itself.
+simulate-intake: venv
+	$(PY) scripts/simulate_intake.py --output-dir evidence/m3
+
+# Render the extraction prompts from schemas/ and print them. The prompts are DATA:
+# adding a field to a schema changes the prompt with no code edit.
+prompts: venv
+	$(PY) -c "from src.pipeline.prompts import render_all; \
+	          [print(f'=== {k} ===\n{v.prompt}\n') for k, v in render_all().items()]"

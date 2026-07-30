@@ -1,0 +1,828 @@
+{
+  "Comment": "Document intake: OCR -> Classify -> Route -> Extract -> Validate -> Auto-approve or Human review. Every fallible state carries Retry with full jitter and a Catch that routes to the dead-letter path, so a throttle or transient error can never drop a document. Direct SDK integrations are used for Textract, SageMaker Runtime, Bedrock, DynamoDB and SQS; the only Lambdas are NormalizeOcr (Textract's block graph -> reading-order text + content hash), ValidateExtraction (JSON Schema + cross-field rules, which ASL cannot express), and the reviewer-facing API (outside this state machine).",
+  "StartAt": "Prepare",
+  "TimeoutSeconds": 86400,
+  "States": {
+    "Prepare": {
+      "Comment": "Derive the correlation id and idempotency key from the S3 event, and seed empty ocr/classification placeholders.\n\nThe placeholders are not cosmetic. The dead-letter state reads $.ocr and $.classification to record how far the document got, and JSONPath references to missing fields fail the state — so without seeding them, a failure during OCR would fail the dead-letter write too, losing the document precisely when the dead-letter path is the only thing that could save it.\n\ncorrelation_id and idempotency_key are equal by construction: both are bucket#key#versionId. One is used for deduplication, one for tracing, and making them the same value means a dead-letter entry can be found by either without a join. versionId is included so re-uploading genuinely new content under the same key is a new document, while a duplicate delivery of the same version is not.",
+      "Type": "Pass",
+      "Parameters": {
+        "correlation_id.$": "States.Format('{}#{}#{}', $.document.bucket, $.document.key, $.document.version_id)",
+        "idempotency_key.$": "States.Format('{}#{}#{}', $.document.bucket, $.document.key, $.document.version_id)",
+        "document.$": "$.document",
+        "ocr": {
+          "text": "",
+          "content_sha256": "",
+          "char_count": 0,
+          "line_count": 0
+        },
+        "classification": {
+          "predicted_class": "",
+          "confidence": 0,
+          "model_version": ""
+        }
+      },
+      "Next": "ClaimIdempotencyKey"
+    },
+
+    "ClaimIdempotencyKey": {
+      "Comment": "Idempotency guard. A conditional PutItem on (bucket, key, versionId) succeeds exactly once; a duplicate S3 delivery fails the condition and short-circuits. This runs FIRST so a duplicate costs one DynamoDB write rather than an OCR call, a Bedrock call, and a second review task. The execution name is also derived from the same key, which stops most duplicates before they even start an execution — this state catches the rest, including replays after the 90-day execution-name dedupe window.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${LedgerTable}",
+        "Item": {
+          "idempotency_key": { "S.$": "$.idempotency_key" },
+          "correlation_id": { "S.$": "$.correlation_id" },
+          "bucket": { "S.$": "$.document.bucket" },
+          "object_key": { "S.$": "$.document.key" },
+          "version_id": { "S.$": "$.document.version_id" },
+          "status": { "S": "PROCESSING" },
+          "execution_arn": { "S.$": "$$.Execution.Id" },
+          "started_at": { "S.$": "$$.State.EnteredTime" }
+        },
+        "ConditionExpression": "attribute_not_exists(idempotency_key)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "A failed condition means this document has already been claimed. That is the expected duplicate path, not an error.",
+          "ErrorEquals": ["DynamoDb.ConditionalCheckFailedException"],
+          "Next": "DuplicateDelivery",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ExtractText"
+    },
+
+    "DuplicateDelivery": {
+      "Comment": "Terminal success, not failure. The document was already processed or is in flight, so there is nothing to do and nothing is wrong. Succeeding here (rather than failing) keeps the state machine's failure metrics meaningful — duplicate S3 deliveries are routine and would otherwise show up as a permanent error rate.",
+      "Type": "Pass",
+      "Parameters": {
+        "outcome": "DUPLICATE_IGNORED",
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.idempotency_key",
+        "message": "Document already claimed by an earlier execution; no second result or review task created."
+      },
+      "End": true
+    },
+
+    "ExtractText": {
+      "Comment": "OCR via Textract, direct SDK integration. DetectDocumentText rather than AnalyzeDocument: we need reading-order text for a bag-of-words classifier, not forms or tables, and AnalyzeDocument costs substantially more per page.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:textract:detectDocumentText",
+      "Parameters": {
+        "Document": {
+          "S3Object": {
+            "Bucket.$": "$.document.bucket",
+            "Name.$": "$.document.key"
+          }
+        }
+      },
+      "ResultSelector": {
+        "blocks.$": "$.Blocks"
+      },
+      "ResultPath": "$.ocr_raw",
+      "Retry": [
+        {
+          "Comment": "Textract throttles aggressively at low concurrency. Full jitter matters here more than anywhere else in this workflow: an S3 batch upload starts many executions simultaneously, and without jitter they all retry in lockstep and re-throttle each other indefinitely.",
+          "ErrorEquals": [
+            "Textract.ThrottlingException",
+            "Textract.ProvisionedThroughputExceededException",
+            "Textract.LimitExceededException",
+            "Textract.InternalServerErrorException",
+            "Textract.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 60,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": ["States.Timeout", "States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "An unreadable or unsupported document is a permanent failure, not a transient one — retrying will never help, so it goes straight to the dead-letter path with its cause.",
+          "ErrorEquals": [
+            "Textract.UnsupportedDocumentException",
+            "Textract.InvalidS3ObjectException",
+            "Textract.DocumentTooLargeException",
+            "Textract.BadDocumentException"
+          ],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "NormalizeOcr"
+    },
+
+    "NormalizeOcr": {
+      "Comment": "LAMBDA 1 of 2 in this workflow, justified: Textract returns a block graph, and assembling reading-order text from it is a real transformation, not a field mapping. It also computes the content hash used for content-level deduplication and emits page/char counts that M4 turns into metrics.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${NormalizeOcrFunctionArn}",
+        "Payload": {
+          "correlation_id.$": "$.correlation_id",
+          "blocks.$": "$.ocr_raw.blocks"
+        }
+      },
+      "ResultSelector": {
+        "text.$": "$.Payload.text",
+        "content_sha256.$": "$.Payload.content_sha256",
+        "char_count.$": "$.Payload.char_count",
+        "line_count.$": "$.Payload.line_count"
+      },
+      "ResultPath": "$.ocr",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckEmptyDocument"
+    },
+
+    "CheckEmptyDocument": {
+      "Comment": "A document Textract could read but which yielded no text is not a classification problem — the classifier would return a confident answer for an empty string. Caught here so it dead-letters with an accurate cause instead of being auto-approved.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ocr.char_count",
+          "NumericLessThan": 20,
+          "Next": "DeadLetter"
+        }
+      ],
+      "Default": "Classify"
+    },
+
+    "Classify": {
+      "Comment": "Classification via the SageMaker endpoint, direct SDK integration. The endpoint returns the full class distribution and its own auto_approve_eligible flag, computed against the same threshold constant the routing Choice below uses.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sagemakerruntime:invokeEndpoint",
+      "Parameters": {
+        "EndpointName": "${EndpointName}",
+        "ContentType": "application/json",
+        "Accept": "application/json",
+        "CustomAttributes.$": "$.correlation_id",
+        "Body": {
+          "text.$": "$.ocr.text"
+        }
+      },
+      "ResultSelector": {
+        "body.$": "States.StringToJson($.Body)"
+      },
+      "ResultPath": "$.classification_raw",
+      "Retry": [
+        {
+          "Comment": "ModelNotReadyException is retried with a longer initial interval than the throttle case: it means the endpoint is still bringing a variant into service, which resolves on the order of a minute, not a second.",
+          "ErrorEquals": ["SageMakerRuntime.ModelNotReadyException"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": [
+            "SageMakerRuntime.ThrottlingException",
+            "SageMakerRuntime.ServiceUnavailable",
+            "SageMakerRuntime.InternalFailure",
+            "SageMakerRuntime.SdkClientException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 5,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 30,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": ["States.Timeout", "States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "A 4xx from the endpoint means the request itself is wrong (bad payload, oversized document). Retrying is pointless and would only delay the dead-letter record.",
+          "ErrorEquals": ["SageMakerRuntime.ValidationError"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "UnpackClassification"
+    },
+
+    "UnpackClassification": {
+      "Comment": "Lift the first prediction to a stable path so every downstream state reads $.classification.* rather than indexing into the response envelope. Keeps the response-shape dependency in exactly one place.",
+      "Type": "Pass",
+      "Parameters": {
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.idempotency_key",
+        "document.$": "$.document",
+        "ocr.$": "$.ocr",
+        "classification": {
+          "predicted_class.$": "$.classification_raw.body.predictions[0].predicted_class",
+          "confidence.$": "$.classification_raw.body.predictions[0].confidence",
+          "class_probabilities.$": "$.classification_raw.body.predictions[0].class_probabilities",
+          "auto_approve_eligible.$": "$.classification_raw.body.predictions[0].auto_approve_eligible",
+          "confidence_threshold.$": "$.classification_raw.body.predictions[0].confidence_threshold",
+          "model_version.$": "$.classification_raw.body.model_version"
+        }
+      },
+      "Next": "Route"
+    },
+
+    "Route": {
+      "Comment": "Routing gate: confidence AND business rule, no Lambda. Two independent reasons to involve a human. (1) Low confidence — the model itself says it is unsure. (2) A business rule that overrides confidence entirely: medical_report always goes to review regardless of how confident the model is, because the cost of a wrong auto-approval on clinical data is not symmetric with the cost of a human glance. Note the business rule is checked FIRST, so it cannot be bypassed by a confident model.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Comment": "Business-rule override: always-review classes.",
+          "Variable": "$.classification.predicted_class",
+          "StringEquals": "medical_report",
+          "Next": "FetchExtractionPrompt"
+        },
+        {
+          "Comment": "Model is not confident enough to auto-approve. Extraction still runs — a reviewer correcting a document wants to see the extracted fields, not an empty form.",
+          "Variable": "$.classification.auto_approve_eligible",
+          "BooleanEquals": false,
+          "Next": "FetchExtractionPrompt"
+        }
+      ],
+      "Default": "FetchExtractionPrompt"
+    },
+
+    "FetchExtractionPrompt": {
+      "Comment": "Read the class-specific prompt and response schema from DynamoDB, direct SDK integration. The prompt is DATA, rendered from schemas/<class>.json at deploy time — so adding a field or a document class needs no code, no ASL and no Terraform change. This is also what makes 'Bedrock deprecated the model you pinned' a config change rather than a rewrite.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:getItem",
+      "Parameters": {
+        "TableName": "${PromptsTable}",
+        "Key": {
+          "document_class": { "S.$": "$.classification.predicted_class" }
+        },
+        "ConsistentRead": true
+      },
+      "ResultSelector": {
+        "prompt.$": "$.Item.prompt.S",
+        "response_schema.$": "$.Item.response_schema.S",
+        "template_version.$": "$.Item.template_version.S"
+      },
+      "ResultPath": "$.extraction_prompt",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "Extract"
+    },
+
+    "Extract": {
+      "Comment": "Field extraction via Bedrock, direct SDK integration. The correlation_id is threaded into the request so a Bedrock invocation-log entry can be joined to the document that caused it — without that, LLM cost and latency cannot be attributed per document.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::bedrock:invokeModel",
+      "Parameters": {
+        "ModelId": "${BedrockModelId}",
+        "ContentType": "application/json",
+        "Accept": "application/json",
+        "Body": {
+          "anthropic_version": "bedrock-2023-05-31",
+          "max_tokens": 2048,
+          "temperature": 0,
+          "system.$": "$.extraction_prompt.prompt",
+          "messages": [
+            {
+              "role": "user",
+              "content.$": "States.Format('<document>\n{}\n</document>\n\nExtract the fields as JSON.', $.ocr.text)"
+            }
+          ]
+        }
+      },
+      "ResultSelector": {
+        "raw.$": "$.Body",
+        "input_tokens.$": "$.Body.usage.input_tokens",
+        "output_tokens.$": "$.Body.usage.output_tokens",
+        "stop_reason.$": "$.Body.stop_reason"
+      },
+      "ResultPath": "$.extraction_raw",
+      "Retry": [
+        {
+          "Comment": "Bedrock throttling is the most likely failure in this workflow at any real volume, and it is the one the assignment calls out explicitly: a throttle must never lose a document. Six attempts with full jitter and a 60s cap covers a multi-minute throttling window; the Catch below guarantees the document survives even if it does not.",
+          "ErrorEquals": [
+            "Bedrock.ThrottlingException",
+            "Bedrock.ServiceQuotaExceededException",
+            "Bedrock.ModelTimeoutException",
+            "Bedrock.ModelNotReadyException",
+            "Bedrock.InternalServerException",
+            "Bedrock.SdkClientException"
+          ],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 6,
+          "BackoffRate": 2,
+          "MaxDelaySeconds": 60,
+          "JitterStrategy": "FULL"
+        },
+        {
+          "ErrorEquals": ["States.Timeout", "States.TaskFailed"],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "Extraction failure does NOT dead-letter the document. Classification succeeded, so there is a usable partial result and a human can supply the fields. Sending it to review is strictly better than discarding it — this is the difference between 'Bedrock was throttled' and 'the document is lost'.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ExtractionUnavailable",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ValidateExtraction"
+    },
+
+    "ExtractionUnavailable": {
+      "Comment": "Extraction could not complete after all retries. Mark the document for human review with an empty field set and the reason, rather than losing it.",
+      "Type": "Pass",
+      "Parameters": {
+        "correlation_id.$": "$.correlation_id",
+        "idempotency_key.$": "$.idempotency_key",
+        "document.$": "$.document",
+        "ocr.$": "$.ocr",
+        "classification.$": "$.classification",
+        "extraction": {
+          "fields": {},
+          "available": false
+        },
+        "validation": {
+          "valid": false,
+          "issue_count": 1,
+          "issues": [
+            {
+              "field": "<extraction>",
+              "code": "extraction_unavailable",
+              "message": "Bedrock extraction failed after retries; fields require manual entry."
+            }
+          ],
+          "failed_fields": ["<extraction>"]
+        },
+        "review_reason": "EXTRACTION_UNAVAILABLE"
+      },
+      "Next": "CreateReviewTask"
+    },
+
+    "ValidateExtraction": {
+      "Comment": "LAMBDA 2 of 2, justified: JSON Schema validation and cross-field rules (date ordering, plausibility) cannot be expressed in ASL. A Choice state can compare two values but cannot evaluate a regex, an enum, or 'expiry_date must be after date_of_birth'.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ValidateFunctionArn}",
+        "Payload": {
+          "correlation_id.$": "$.correlation_id",
+          "document_class.$": "$.classification.predicted_class",
+          "response_schema.$": "$.extraction_prompt.response_schema",
+          "model_output.$": "$.extraction_raw.raw"
+        }
+      },
+      "ResultSelector": {
+        "fields.$": "$.Payload.fields",
+        "validation.$": "$.Payload.validation"
+      },
+      "ResultPath": "$.validated",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "DecideOutcome"
+    },
+
+    "DecideOutcome": {
+      "Comment": "The auto-approve decision. Three independent conditions must ALL hold to auto-approve: the model was confident, the class is not an always-review class, and the extraction validated. Expressed as reasons-to-review rather than as one compound condition, so a dashboard can report WHY documents went to review — which is the number M4 needs and M5 uses as its concept-drift proxy.",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.validated.validation.valid",
+          "BooleanEquals": false,
+          "Next": "MarkSchemaFailure"
+        },
+        {
+          "Variable": "$.classification.predicted_class",
+          "StringEquals": "medical_report",
+          "Next": "MarkBusinessRule"
+        },
+        {
+          "Variable": "$.classification.auto_approve_eligible",
+          "BooleanEquals": false,
+          "Next": "MarkLowConfidence"
+        }
+      ],
+      "Default": "AutoApprove"
+    },
+
+    "MarkSchemaFailure": {
+      "Type": "Pass",
+      "Result": "SCHEMA_VALIDATION_FAILED",
+      "ResultPath": "$.review_reason",
+      "Next": "CreateReviewTask"
+    },
+
+    "MarkBusinessRule": {
+      "Type": "Pass",
+      "Result": "BUSINESS_RULE_ALWAYS_REVIEW",
+      "ResultPath": "$.review_reason",
+      "Next": "CreateReviewTask"
+    },
+
+    "MarkLowConfidence": {
+      "Type": "Pass",
+      "Result": "LOW_CONFIDENCE",
+      "ResultPath": "$.review_reason",
+      "Next": "CreateReviewTask"
+    },
+
+    "AutoApprove": {
+      "Comment": "Write the approved result, direct SDK integration. The stored record carries the model version and the full class distribution, not just the winning label, so a later question about why a document was classified this way is answerable without re-running the model.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${ResultsTable}",
+        "Item": {
+          "correlation_id": { "S.$": "$.correlation_id" },
+          "idempotency_key": { "S.$": "$.idempotency_key" },
+          "outcome": { "S": "AUTO_APPROVED" },
+          "document_class": { "S.$": "$.classification.predicted_class" },
+          "confidence": { "N.$": "States.Format('{}', $.classification.confidence)" },
+          "model_version": { "S.$": "$.classification.model_version" },
+          "extracted_fields": { "S.$": "States.JsonToString($.validated.fields)" },
+          "class_probabilities": { "S.$": "States.JsonToString($.classification.class_probabilities)" },
+          "content_sha256": { "S.$": "$.ocr.content_sha256" },
+          "source_bucket": { "S.$": "$.document.bucket" },
+          "source_key": { "S.$": "$.document.key" },
+          "completed_at": { "S.$": "$$.State.EnteredTime" }
+        },
+        "ConditionExpression": "attribute_not_exists(correlation_id)"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "A conditional failure here means a result already exists for this correlation id — the second idempotency guard. Treated as success, not error.",
+          "ErrorEquals": ["DynamoDb.ConditionalCheckFailedException"],
+          "Next": "DuplicateDelivery",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "MarkLedgerComplete"
+    },
+
+    "CreateReviewTask": {
+      "Comment": "Human review via .waitForTaskToken. The task token is written into the review queue with the document, the prediction and the validation issues, and this execution then waits. A reviewer submits a correction through the review API, which calls SendTaskSuccess with the token and resumes the workflow here. The conditional write is the second half of the idempotency guarantee: one document can never produce two review tasks.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem.waitForTaskToken",
+      "TimeoutSeconds": 604800,
+      "Parameters": {
+        "TableName": "${ReviewQueueTable}",
+        "Item": {
+          "correlation_id": { "S.$": "$.correlation_id" },
+          "idempotency_key": { "S.$": "$.idempotency_key" },
+          "task_token": { "S.$": "$$.Task.Token" },
+          "status": { "S": "PENDING_REVIEW" },
+          "review_reason": { "S.$": "$.review_reason" },
+          "predicted_class": { "S.$": "$.classification.predicted_class" },
+          "confidence": { "N.$": "States.Format('{}', $.classification.confidence)" },
+          "class_probabilities": { "S.$": "States.JsonToString($.classification.class_probabilities)" },
+          "model_version": { "S.$": "$.classification.model_version" },
+          "extracted_fields": { "S.$": "States.JsonToString($.validated.fields)" },
+          "validation_issues": { "S.$": "States.JsonToString($.validated.validation.issues)" },
+          "document_text": { "S.$": "$.ocr.text" },
+          "source_bucket": { "S.$": "$.document.bucket" },
+          "source_key": { "S.$": "$.document.key" },
+          "queued_at": { "S.$": "$$.State.EnteredTime" }
+        },
+        "ConditionExpression": "attribute_not_exists(correlation_id)"
+      },
+      "ResultPath": "$.review",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "A review that is never completed must not hang forever. States.Timeout after the 7-day window sends the document to the dead-letter path with an accurate cause, so an abandoned queue is visible rather than silent.",
+          "ErrorEquals": ["States.Timeout"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        },
+        {
+          "ErrorEquals": ["DynamoDb.ConditionalCheckFailedException"],
+          "Next": "DuplicateDelivery",
+          "ResultPath": "$.error"
+        },
+        {
+          "Comment": "SendTaskFailure from the review API lands here — a reviewer explicitly rejecting a document rather than correcting it.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "PersistCorrection"
+    },
+
+    "PersistCorrection": {
+      "Comment": "Write the reviewer's correction back as LABELLED TRAINING DATA, direct SDK integration. Carries reviewer id, timestamp, the original prediction AND its confidence, the corrected label, and a document reference. The original prediction is essential: without it this row is just a label, and the retraining loop cannot tell a confirmation from a correction — which is exactly the signal M5's concept-drift proxy is built on.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${CorrectionsTable}",
+        "Item": {
+          "correlation_id": { "S.$": "$.correlation_id" },
+          "reviewed_at": { "S.$": "$$.State.EnteredTime" },
+          "reviewer_id": { "S.$": "$.review.reviewer_id" },
+          "original_predicted_class": { "S.$": "$.classification.predicted_class" },
+          "original_confidence": { "N.$": "States.Format('{}', $.classification.confidence)" },
+          "corrected_class": { "S.$": "$.review.corrected_class" },
+          "was_prediction_correct": { "BOOL.$": "$.review.prediction_was_correct" },
+          "corrected_fields": { "S.$": "States.JsonToString($.review.corrected_fields)" },
+          "review_reason": { "S.$": "$.review_reason" },
+          "model_version": { "S.$": "$.classification.model_version" },
+          "document_text": { "S.$": "$.ocr.text" },
+          "content_sha256": { "S.$": "$.ocr.content_sha256" },
+          "source_bucket": { "S.$": "$.document.bucket" },
+          "source_key": { "S.$": "$.document.key" }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "Losing a correction is worse than losing a document: the document can be re-delivered, but a reviewer's labour cannot be recovered. Dead-letters with the full correction payload so it can be replayed.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "StoreReviewedResult"
+    },
+
+    "StoreReviewedResult": {
+      "Comment": "Store the human-approved result, direct SDK integration. Same table as auto-approved results with a different outcome, so downstream consumers read one place and the auto-approval rate is a simple aggregation.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:putItem",
+      "Parameters": {
+        "TableName": "${ResultsTable}",
+        "Item": {
+          "correlation_id": { "S.$": "$.correlation_id" },
+          "idempotency_key": { "S.$": "$.idempotency_key" },
+          "outcome": { "S": "HUMAN_APPROVED" },
+          "document_class": { "S.$": "$.review.corrected_class" },
+          "original_predicted_class": { "S.$": "$.classification.predicted_class" },
+          "confidence": { "N.$": "States.Format('{}', $.classification.confidence)" },
+          "model_version": { "S.$": "$.classification.model_version" },
+          "extracted_fields": { "S.$": "States.JsonToString($.review.corrected_fields)" },
+          "class_probabilities": { "S.$": "States.JsonToString($.classification.class_probabilities)" },
+          "reviewer_id": { "S.$": "$.review.reviewer_id" },
+          "review_reason": { "S.$": "$.review_reason" },
+          "content_sha256": { "S.$": "$.ocr.content_sha256" },
+          "source_bucket": { "S.$": "$.document.bucket" },
+          "source_key": { "S.$": "$.document.key" },
+          "completed_at": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "DynamoDb.ProvisionedThroughputExceededException",
+            "DynamoDb.RequestLimitExceeded",
+            "DynamoDb.InternalServerErrorException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeadLetter",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "MarkLedgerComplete"
+    },
+
+    "MarkLedgerComplete": {
+      "Comment": "Close the ledger entry. Deliberately last: while it says PROCESSING, a duplicate delivery is still rejected by the conditional claim, so there is no window in which two executions can both proceed.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${LedgerTable}",
+        "Key": {
+          "idempotency_key": { "S.$": "$.idempotency_key" }
+        },
+        "UpdateExpression": "SET #s = :done, completed_at = :now",
+        "ExpressionAttributeNames": {
+          "#s": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":done": { "S": "COMPLETE" },
+          ":now": { "S.$": "$$.State.EnteredTime" }
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "The result is already durably stored, so failing to close the ledger must not fail the execution. Worst case a later duplicate is rejected, which is the safe direction.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Succeed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "Succeed"
+    },
+
+    "Succeed": {
+      "Type": "Succeed"
+    },
+
+    "DeadLetter": {
+      "Comment": "Dead-letter path. Carries enough context to debug ONE document without re-running it: correlation id, the state that failed, the error and cause, a pointer to the source object, and whatever OCR/classification output was obtained before the failure. Sent to SQS rather than only logged, so failures are a queue someone can drain and replay, not a log search.",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {
+        "QueueUrl": "${DeadLetterQueueUrl}",
+        "MessageBody": {
+          "correlation_id.$": "$.correlation_id",
+          "idempotency_key.$": "$.idempotency_key",
+          "execution_arn.$": "$$.Execution.Id",
+          "failed_at.$": "$$.State.EnteredTime",
+          "state_machine.$": "$$.StateMachine.Name",
+          "error.$": "$.error",
+          "source_bucket.$": "$.document.bucket",
+          "source_key.$": "$.document.key",
+          "source_version_id.$": "$.document.version_id",
+          "ocr_char_count.$": "States.JsonToString($.ocr)",
+          "classification.$": "States.JsonToString($.classification)"
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 4,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "Comment": "If even the dead-letter write fails, fail loudly rather than silently succeeding. This is the one place a bare Fail is correct.",
+          "ErrorEquals": ["States.ALL"],
+          "Next": "FailedTerminal",
+          "ResultPath": "$.dlq_error"
+        }
+      ],
+      "Next": "FailedTerminal"
+    },
+
+    "FailedTerminal": {
+      "Type": "Fail",
+      "Error": "IntakeFailed",
+      "Cause": "Document processing failed; see the dead-letter queue entry for this correlation_id."
+    }
+  }
+}

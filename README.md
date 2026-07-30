@@ -25,7 +25,7 @@ been written yet, and no AWS resource has ever been applied from this repo.
 | **M0** Foundations (IaC) | **Code complete, never applied** | `infra/` — state backend, KMS, ECR, 4 buckets, per-component IAM. `terraform validate` + `fmt` clean on all three roots. |
 | **M1** Training + Registry | **Code complete, runs locally; never run on SageMaker** | Generator + 4 schemas, swappable model interface, train/evaluate entrypoints, calibration + ECE, baseline artifact, registry assembly. Tested and type-checked locally. |
 | **M2** Deployment | **Code complete; endpoint never deployed, image never built** | Inference handlers + serving layer with verified `/ping`/`/invocations` contract, Dockerfile, endpoint Terraform with canary + alarm-driven auto-rollback, data capture, measured autoscaling target, approved-only resolver, post-deploy smoke test. |
-| M3 Orchestration + HITL | Not started | — |
+| **M3** Orchestration + HITL | **ASL + handlers complete and tested; NO Terraform, never executed** | 25-state intake ASL with retry/jitter/catch throughout, idempotency ledger, `.waitForTaskToken` review, corrections as labelled data, dead-letter path. Prompts rendered from schemas. Local simulation produces the two required traces. |
 | M4 Observability | Not started | — |
 | M5 Drift + Retraining | Not started | — |
 | M6 CI/CD | Not started | `.github/workflows/` is empty |
@@ -337,6 +337,32 @@ Honest list. These are things that are wrong or missing right now, not a roadmap
   `apply` and `destroy` have never run. Three of M0's five acceptance criteria
   are consequently unmet, and `evidence/` is empty. This is the first thing to
   fix.
+
+**M3 specifically**
+
+- **The M3 infrastructure does not exist.** The ASL definition, the three Lambda
+  handlers and the prompt renderer are written and tested, but the Terraform that
+  would deploy them — the state machine, five DynamoDB tables, three Lambda
+  functions, the EventBridge rule, the review API Gateway and the SQS dead-letter
+  queue — is **not written**. This is the largest single gap in the repo.
+- **The traces in `evidence/m3/` are from a local simulation, not a Step Functions
+  execution.** The routing logic, validator, correction flow and idempotency
+  semantics are genuinely exercised; Textract, Bedrock, DynamoDB and Step Functions
+  itself are stubbed. `TestSimulatorMatchesAsl` asserts the simulator has not
+  diverged from the deployed definition, which is what makes the traces worth
+  anything — but they are not the deliverable.
+- **The ASL has never been validated by the service.**
+  `aws stepfunctions validate-state-machine-definition` needs credentials.
+  `tests/test_asl.py` checks 37 structural invariants, which is a stronger check than
+  syntax in most respects, but it cannot catch an invalid intrinsic-function
+  signature or a mistyped SDK integration ARN.
+- **The `Extract` state's Bedrock request body is written for the Anthropic Messages
+  API shape and is unverified against the service.** `parse_model_json` tolerates
+  three response shapes for this reason, but the request side has one chance to be
+  right.
+- **No load or concurrency testing of the idempotency claim.** Two simultaneous
+  deliveries of the same object should have exactly one win the conditional write.
+  That is how DynamoDB conditional writes behave, but it is asserted, not observed.
 
 **M2 specifically**
 

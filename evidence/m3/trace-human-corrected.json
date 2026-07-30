@@ -1,0 +1,133 @@
+{
+  "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1",
+  "step_count": 18,
+  "states_entered": [
+    "Prepare",
+    "ClaimIdempotencyKey",
+    "ExtractText",
+    "NormalizeOcr",
+    "CheckEmptyDocument",
+    "Classify",
+    "Route",
+    "FetchExtractionPrompt",
+    "Extract",
+    "ValidateExtraction",
+    "DecideOutcome",
+    "CreateReviewTask",
+    "ReviewApi.submitCorrection",
+    "CreateReviewTask.resumed",
+    "PersistCorrection",
+    "StoreReviewedResult",
+    "MarkLedgerComplete",
+    "Succeed"
+  ],
+  "steps": [
+    {
+      "state": "Prepare",
+      "correlation_id": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1",
+      "idempotency_key": "intake-raw-dev#incoming/doc-medical_report-00000.pdf#v1"
+    },
+    {
+      "state": "ClaimIdempotencyKey",
+      "outcome": "claimed",
+      "status": "PROCESSING"
+    },
+    {
+      "state": "ExtractText",
+      "block_count": 3,
+      "service": "textract (stub)"
+    },
+    {
+      "state": "NormalizeOcr",
+      "char_count": 190,
+      "line_count": 3,
+      "content_sha256": "sha256:bee3a4e5aa74a8e1..."
+    },
+    {
+      "state": "CheckEmptyDocument",
+      "decision": "Classify"
+    },
+    {
+      "state": "Classify",
+      "predicted_class": "medical_report",
+      "confidence": 0.9762,
+      "auto_approve_eligible": true,
+      "true_label": "medical_report"
+    },
+    {
+      "state": "Route",
+      "next": "FetchExtractionPrompt",
+      "reason": "business rule: always review"
+    },
+    {
+      "state": "FetchExtractionPrompt",
+      "document_class": "medical_report",
+      "template_version": "1.0.0",
+      "prompt_chars": 2058
+    },
+    {
+      "state": "Extract",
+      "service": "bedrock (stub)",
+      "mode": "good",
+      "input_tokens": 22,
+      "output_tokens": 120
+    },
+    {
+      "state": "ValidateExtraction",
+      "valid": true,
+      "issue_count": 0,
+      "failed_fields": []
+    },
+    {
+      "state": "DecideOutcome",
+      "decision": "CreateReviewTask",
+      "review_reason": "BUSINESS_RULE_ALWAYS_REVIEW"
+    },
+    {
+      "state": "CreateReviewTask",
+      "status": "PENDING_REVIEW",
+      "review_reason": "BUSINESS_RULE_ALWAYS_REVIEW",
+      "task_token": "tok-62e4ccfcd68291be",
+      "waiting": true
+    },
+    {
+      "state": "ReviewApi.submitCorrection",
+      "reviewer_id": "reviewer-eng-07",
+      "corrected_class": "medical_report",
+      "prediction_was_correct": true,
+      "note": "out-of-band HTTP call; resumes the waiting execution via SendTaskSuccess"
+    },
+    {
+      "state": "CreateReviewTask.resumed",
+      "task_token": "tok-62e4ccfcd68291be",
+      "output_keys": [
+        "corrected_class",
+        "corrected_fields",
+        "note",
+        "prediction_was_correct",
+        "reviewer_id"
+      ]
+    },
+    {
+      "state": "PersistCorrection",
+      "table": "corrections",
+      "original_predicted_class": "medical_report",
+      "corrected_class": "medical_report",
+      "was_prediction_correct": true,
+      "note": "labelled training data, with provenance"
+    },
+    {
+      "state": "StoreReviewedResult",
+      "outcome": "HUMAN_APPROVED",
+      "table": "results"
+    },
+    {
+      "state": "MarkLedgerComplete",
+      "status": "COMPLETE"
+    },
+    {
+      "state": "Succeed",
+      "end": true
+    }
+  ]
+}

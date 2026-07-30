@@ -1,0 +1,26 @@
+{
+  "correlation_id": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1",
+  "step_count": 3,
+  "states_entered": [
+    "Prepare",
+    "ClaimIdempotencyKey",
+    "DuplicateDelivery"
+  ],
+  "steps": [
+    {
+      "state": "Prepare",
+      "correlation_id": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1",
+      "idempotency_key": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1"
+    },
+    {
+      "state": "ClaimIdempotencyKey",
+      "outcome": "ConditionalCheckFailedException",
+      "note": "already claimed"
+    },
+    {
+      "state": "DuplicateDelivery",
+      "outcome": "DUPLICATE_IGNORED",
+      "end": true
+    }
+  ]
+}

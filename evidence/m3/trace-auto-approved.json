@@ -1,0 +1,95 @@
+{
+  "correlation_id": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1",
+  "step_count": 14,
+  "states_entered": [
+    "Prepare",
+    "ClaimIdempotencyKey",
+    "ExtractText",
+    "NormalizeOcr",
+    "CheckEmptyDocument",
+    "Classify",
+    "Route",
+    "FetchExtractionPrompt",
+    "Extract",
+    "ValidateExtraction",
+    "DecideOutcome",
+    "AutoApprove",
+    "MarkLedgerComplete",
+    "Succeed"
+  ],
+  "steps": [
+    {
+      "state": "Prepare",
+      "correlation_id": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1",
+      "idempotency_key": "intake-raw-dev#incoming/doc-correspondence-00000.pdf#v1"
+    },
+    {
+      "state": "ClaimIdempotencyKey",
+      "outcome": "claimed",
+      "status": "PROCESSING"
+    },
+    {
+      "state": "ExtractText",
+      "block_count": 2,
+      "service": "textract (stub)"
+    },
+    {
+      "state": "NormalizeOcr",
+      "char_count": 117,
+      "line_count": 2,
+      "content_sha256": "sha256:29489291889beec6..."
+    },
+    {
+      "state": "CheckEmptyDocument",
+      "decision": "Classify"
+    },
+    {
+      "state": "Classify",
+      "predicted_class": "correspondence",
+      "confidence": 0.9606,
+      "auto_approve_eligible": true,
+      "true_label": "correspondence"
+    },
+    {
+      "state": "Route",
+      "next": "FetchExtractionPrompt",
+      "reason": "eligible for auto-approval"
+    },
+    {
+      "state": "FetchExtractionPrompt",
+      "document_class": "correspondence",
+      "template_version": "1.0.0",
+      "prompt_chars": 2031
+    },
+    {
+      "state": "Extract",
+      "service": "bedrock (stub)",
+      "mode": "good",
+      "input_tokens": 14,
+      "output_tokens": 120
+    },
+    {
+      "state": "ValidateExtraction",
+      "valid": true,
+      "issue_count": 0,
+      "failed_fields": []
+    },
+    {
+      "state": "DecideOutcome",
+      "decision": "AutoApprove"
+    },
+    {
+      "state": "AutoApprove",
+      "outcome": "AUTO_APPROVED",
+      "table": "results"
+    },
+    {
+      "state": "MarkLedgerComplete",
+      "status": "COMPLETE"
+    },
+    {
+      "state": "Succeed",
+      "end": true
+    }
+  ]
+}

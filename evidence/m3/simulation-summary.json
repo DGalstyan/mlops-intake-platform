@@ -1,0 +1,12 @@
+{
+  "results_written": 3,
+  "review_tasks_created": 2,
+  "corrections_recorded": 2,
+  "dead_letter_entries": 0,
+  "ledger_entries": 3,
+  "outcomes": {
+    "doc-correspondence-00000.pdf#v1": "AUTO_APPROVED",
+    "doc-medical_report-00000.pdf#v1": "HUMAN_APPROVED",
+    "doc-id_document-00000.pdf#v1": "HUMAN_APPROVED"
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "correlation_id": "intake-raw-dev#incoming/doc-id_document-00000.pdf#v1",
+  "step_count": 18,
+  "states_entered": [
+    "Prepare",
+    "ClaimIdempotencyKey",
+    "ExtractText",
+    "NormalizeOcr",
+    "CheckEmptyDocument",
+    "Classify",
+    "Route",
+    "FetchExtractionPrompt",
+    "Extract",
+    "ValidateExtraction",
+    "DecideOutcome",
+    "CreateReviewTask",
+    "ReviewApi.submitCorrection",
+    "CreateReviewTask.resumed",
+    "PersistCorrection",
+    "StoreReviewedResult",
+    "MarkLedgerComplete",
+    "Succeed"
+  ],
+  "steps": [
+    {
+      "state": "Prepare",
+      "correlation_id": "intake-raw-dev#incoming/doc-id_document-00000.pdf#v1",
+      "idempotency_key": "intake-raw-dev#incoming/doc-id_document-00000.pdf#v1"
+    },
+    {
+      "state": "ClaimIdempotencyKey",
+      "outcome": "claimed",
+      "status": "PROCESSING"
+    },
+    {
+      "state": "ExtractText",
+      "block_count": 3,
+      "service": "textract (stub)"
+    },
+    {
+      "state": "NormalizeOcr",
+      "char_count": 123,
+      "line_count": 3,
+      "content_sha256": "sha256:ca8b83c63d6f3859..."
+    },
+    {
+      "state": "CheckEmptyDocument",
+      "decision": "Classify"
+    },
+    {
+      "state": "Classify",
+      "predicted_class": "id_document",
+      "confidence": 0.9952,
+      "auto_approve_eligible": true,
+      "true_label": "id_document"
+    },
+    {
+      "state": "Route",
+      "next": "FetchExtractionPrompt",
+      "reason": "eligible for auto-approval"
+    },
+    {
+      "state": "FetchExtractionPrompt",
+      "document_class": "id_document",
+      "template_version": "1.0.0",
+      "prompt_chars": 2035
+    },
+    {
+      "state": "Extract",
+      "service": "bedrock (stub)",
+      "mode": "invalid",
+      "input_tokens": 17,
+      "output_tokens": 120
+    },
+    {
+      "state": "ValidateExtraction",
+      "valid": false,
+      "issue_count": 1,
+      "failed_fields": [
+        "expiry_date"
+      ]
+    },
+    {
+      "state": "DecideOutcome",
+      "decision": "CreateReviewTask",
+      "review_reason": "SCHEMA_VALIDATION_FAILED"
+    },
+    {
+      "state": "CreateReviewTask",
+      "status": "PENDING_REVIEW",
+      "review_reason": "SCHEMA_VALIDATION_FAILED",
+      "task_token": "tok-cd8af55dbd7139e9",
+      "waiting": true
+    },
+    {
+      "state": "ReviewApi.submitCorrection",
+      "reviewer_id": "reviewer-eng-07",
+      "corrected_class": "id_document",
+      "prediction_was_correct": true,
+      "note": "out-of-band HTTP call; resumes the waiting execution via SendTaskSuccess"
+    },
+    {
+      "state": "CreateReviewTask.resumed",
+      "task_token": "tok-cd8af55dbd7139e9",
+      "output_keys": [
+        "corrected_class",
+        "corrected_fields",
+        "note",
+        "prediction_was_correct",
+        "reviewer_id"
+      ]
+    },
+    {
+      "state": "PersistCorrection",
+      "table": "corrections",
+      "original_predicted_class": "id_document",
+      "corrected_class": "id_document",
+      "was_prediction_correct": true,
+      "note": "labelled training data, with provenance"
+    },
+    {
+      "state": "StoreReviewedResult",
+      "outcome": "HUMAN_APPROVED",
+      "table": "results"
+    },
+    {
+      "state": "MarkLedgerComplete",
+      "status": "COMPLETE"
+    },
+    {
+      "state": "Succeed",
+      "end": true
+    }
+  ]
+}
