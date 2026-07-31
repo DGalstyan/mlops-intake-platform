@@ -27,26 +27,26 @@ cold starts or readiness failures got slower", and adding it is a one-line dashb
 change I would make before the next incident. In its absence:
 
 - `ModelLatency` up → the model itself, or the documents it is being given.
-- `ModelLatency` flat but end-to-end `ExecutionTime` up → not the endpoint at all.
-  Textract or
-  Bedrock is throttling and the state machine is retrying with backoff, which is the
-  retry policy working. Check `psi`-style token counts too: a longer document is a
-  slower document all the way through.
+- `ModelLatency` flat but end-to-end `ExecutionTime` up → not the endpoint at
+  all. Textract or Bedrock is throttling and the state machine is retrying with
+  backoff, which is the retry policy working. Check `psi`-style token counts
+  too: a longer document is a slower document all the way through.
 
 **"No traffic change" is the claim I would test hardest.** Invocations being flat does
 not mean the *work* is flat. Three things move p99 with constant request count:
 
-1. **Documents got bigger.** `OcrCharacters` is emitted per document precisely for
-   this. A scanner change or a new sender doubles the text and the model latency
-   follows.
-2. **Autoscaling scaled in.** Scale-in cooldown is 300s vs 60s out, deliberately, but
-   a quiet period followed by a burst still gives one instance serving what two were.
-   `SageMakerVariantInvocationsPerInstance` against the target of 150 shows this.
+1. **Documents got bigger.** `OcrCharacters` is emitted per document precisely
+   for this. A scanner change or a new sender doubles the text and the model
+   latency follows.
+2. **Autoscaling scaled in.** Scale-in cooldown is 300s vs 60s out,
+   deliberately, but a quiet period followed by a burst still gives one instance
+   serving what two were. `SageMakerVariantInvocationsPerInstance` against the
+   target of 150 shows this.
 3. **A t3 instance exhausted its CPU credits.** This is the one I would suspect
-   soonest and the one the current setup handles worst — `ml.t3.medium` is burstable,
-   chosen for cost, and sustained load past the credit balance throttles it hard.
-   That is a documented trade in the cost table, and the fix is a non-burstable
-   instance type.
+   soonest and the one the current setup handles worst — `ml.t3.medium` is
+   burstable, chosen for cost, and sustained load past the credit balance
+   throttles it hard. That is a documented trade in the cost table, and the fix
+   is a non-burstable instance type.
 
 **What I would be missing:** per-stage latency is not a custom metric — it lives in
 X-Ray, and the X-Ray annotation on `correlation_id` is **not implemented**, so the
@@ -63,34 +63,35 @@ structural rather than a threshold that needs tuning.**
 
 Why each signal stays green:
 
-- **Input drift** compares distributions. A sender who changed one field's *layout*
-  without changing document length or vocabulary moves nothing. PSI on length and
-  token count is blind to where on the page a number sits.
-- **Prediction drift** compares the class mix. Extraction quality is not a class — the
-  document is still correctly identified as an invoice while `total_amount` comes back
-  wrong.
+- **Input drift** compares distributions. A sender who changed one field's
+  *layout* without changing document length or vocabulary moves nothing. PSI on
+  length and token count is blind to where on the page a number sits.
+- **Prediction drift** compares the class mix. Extraction quality is not a class
+  — the document is still correctly identified as an invoice while
+  `total_amount` comes back wrong.
 - **Override rate** only covers documents a human reviewed. Classification and
   extraction are *separate models*: if the classifier is confident (likely), the
   document auto-approves and no human ever sees the bad extraction.
-- **Schema validation** catches *malformed* output, not *wrong* output. A hallucinated
-  `total_amount` of 1284.50 is schema-valid, passes the plausibility rules, and
-  auto-approves.
+- **Schema validation** catches *malformed* output, not *wrong* output. A
+  hallucinated `total_amount` of 1284.50 is schema-valid, passes the
+  plausibility rules, and auto-approves.
 
 **What I would do, in order:**
 
-1. Get specific documents from the customer. This is the only ground truth available.
+1. Get specific documents from the customer. This is the only ground truth
+   available.
 2. Pull them from the results table by `correlation_id` and compare stored
-   `extracted_fields` against the source document by hand. That answers "is it wrong,
-   and which field".
-3. Check `template_version` in the prompts table against `PROMPT_TEMPLATE_VERSION` in
-   the code — a re-seed with a changed prompt is a silent behaviour change that
-   nothing alarms on.
+   `extracted_fields` against the source document by hand. That answers "is it
+   wrong, and which field".
+3. Check `template_version` in the prompts table against
+   `PROMPT_TEMPLATE_VERSION` in the code — a re-seed with a changed prompt is a
+   silent behaviour change that nothing alarms on.
 4. Check whether `bedrock_model_id` changed. A model swap changes extraction
-   behaviour with no code diff, and the cost panel is the fastest tell: output tokens
-   move when a model starts padding.
-5. Check the field-level failure breakdown in the validate Lambda's logs. Even if the
-   *rate* is under threshold, a single field failing on a single class is visible
-   there and is not visible on the dashboard.
+   behaviour with no code diff, and the cost panel is the fastest tell: output
+   tokens move when a model starts padding.
+5. Check the field-level failure breakdown in the validate Lambda's logs. Even
+   if the *rate* is under threshold, a single field failing on a single class is
+   visible there and is not visible on the dashboard.
 
 **Which metric should have caught it:** none of the current ones could. The two that
 would:
@@ -99,11 +100,12 @@ would:
   class.** A field silently coming back null on 30% of one class is the actual
   signal. Today the platform tracks *validation failures*, not per-field null
   rates, so "the model returned null for `due_date`" is only visible if null
-  makes the document invalid. - **An audit sample of confidently auto-approved
-  documents.** Routing a small random percentage to human review anyway is the
-  only mechanism that observes the auto-approved population at all. It is also
-  the fix for the sampling bias in Q7 — one change addresses both, which is why
-  it is the highest-value thing missing.
+  makes the document invalid.
+- **An audit sample of confidently auto-approved documents.** Routing a small
+  random percentage to human review anyway is the only mechanism that observes
+  the auto-approved population at all. It is also the fix for the sampling bias
+  in Q7 — one change addresses both, which is why it is the highest-value thing
+  missing.
 
 ---
 
@@ -123,13 +125,15 @@ permission re-scopes itself), and the cost math.
 made this a rewrite:
 
 1. **The prompt is data, not code.** It lives in DynamoDB, rendered from
-   `schemas/*.json`. Changing models does not touch the prompt, and if the new model
-   needs a different prompt shape that is a `make seed-prompts` away with no deploy.
-2. **The response parser tolerates three shapes.** `parse_model_json` handles the
-   Messages API, the older completion shape, and a bare object, plus markdown fences
-   and surrounding prose. A model that formats differently does not break parsing.
-3. **The IAM policy names the model variable, not a wildcard.** No `bedrock:*` to
-   forget to narrow later.
+   `schemas/*.json`. Changing models does not touch the prompt, and if the new
+   model needs a different prompt shape that is a `make seed-prompts` away with
+   no deploy.
+2. **The response parser tolerates three shapes.** `parse_model_json` handles
+   the Messages API, the older completion shape, and a bare object, plus
+   markdown fences and surrounding prose. A model that formats differently does
+   not break parsing.
+3. **The IAM policy names the model variable, not a wildcard.** No `bedrock:*`
+   to forget to narrow later.
 
 **Where that one-line claim breaks, and it does:** the successor to a pinned Claude
 model is generally **not invocable via a bare `foundation-model/<id>` ARN**. Current
@@ -148,15 +152,16 @@ prompt (which needs no change at all); the IAM is not.
 
 **What is NOT automated, and should not be:**
 
-- **The prices.** `config/prices.json` is per-model, and a swap without updating it
-  makes the cost panel *wrong but plausible* — worse than blank, because nobody
-  investigates a reasonable-looking number. There is a test asserting the priced model
-  matches the Terraform default, so this fails CI rather than drifting silently.
-- **Extraction quality.** The gate compares *classifier* versions on the golden set;
-  there is no equivalent offline eval for the extraction model. Swapping it is
-  currently an unvalidated change, and that is the biggest gap this question exposes.
-  With 30 days I would build a small extraction eval set — 50 documents with
-  hand-checked fields — and diff old model against new before switching.
+- **The prices.** `config/prices.json` is per-model, and a swap without updating
+  it makes the cost panel *wrong but plausible* — worse than blank, because
+  nobody investigates a reasonable-looking number. There is a test asserting the
+  priced model matches the Terraform default, so this fails CI rather than
+  drifting silently.
+- **Extraction quality.** The gate compares *classifier* versions on the golden
+  set; there is no equivalent offline eval for the extraction model. Swapping it
+  is currently an unvalidated change, and that is the biggest gap this question
+  exposes. With 30 days I would build a small extraction eval set — 50 documents
+  with hand-checked fields — and diff old model against new before switching.
 
 **Rollback:** a tfvars revert plus an apply, with no image rebuild, because the model
 id is not baked into anything. Note the apply itself is the constraint — the CI deploy
@@ -170,15 +175,15 @@ running `make apply`.
 **Why the human is there.** The gate proves a candidate is better *on the golden set*.
 It cannot prove three things that matter more:
 
-1. **That the golden set still represents production.** It is synthetic and frozen at
-   M1. Every week it ages.
-2. **That the training data was not poisoned by its own collection process.** The
-   corrections come from human review, which only sees low-confidence documents (Q7).
-   A candidate can score better on the golden set while having over-fitted to the hard
-   slice.
-3. **That the per-class picture is acceptable.** The gate enforces a floor, but a floor
-   is not a judgement — a model that drops `id_document` from 0.95 to 0.62 passes a
-   0.60 floor and should still probably not ship.
+1. **That the golden set still represents production.** It is synthetic and
+   frozen at M1. Every week it ages.
+2. **That the training data was not poisoned by its own collection process.**
+   The corrections come from human review, which only sees low-confidence
+   documents (Q7). A candidate can score better on the golden set while having
+   over-fitted to the hard slice.
+3. **That the per-class picture is acceptable.** The gate enforces a floor, but
+   a floor is not a judgement — a model that drops `id_document` from 0.95 to
+   0.62 passes a 0.60 floor and should still probably not ship.
 
 The human is the only place those get looked at. That is why the approval notification
 tells the reviewer to check per-class F1 and points at the sampling-bias section,
@@ -186,18 +191,18 @@ rather than just saying "a candidate is ready".
 
 **What I would need to remove them:**
 
-1. **An audited random sample of production traffic** to evaluate against, replacing
-   the frozen synthetic golden set. Without this, every automated decision is made on
-   data that is not what the model sees.
-2. **A demonstrated auto-rollback.** The canary and the alarms exist; nothing has ever
-   rolled back. Removing a human gate while the automated safety net is unproven
-   swaps a control that works for one that is asserted.
-3. **A track record.** Ten to twenty retrain cycles where the gate's verdict and the
-   human's decision agreed. If they always agree, the human is ceremony. If they
-   sometimes disagree, that disagreement is exactly the signal that must be encoded
-   before automating.
-4. **Extraction-side evaluation** (see Q3), so "the model got better" covers both
-   models rather than only the classifier.
+1. **An audited random sample of production traffic** to evaluate against,
+   replacing the frozen synthetic golden set. Without this, every automated
+   decision is made on data that is not what the model sees.
+2. **A demonstrated auto-rollback.** The canary and the alarms exist; nothing
+   has ever rolled back. Removing a human gate while the automated safety net is
+   unproven swaps a control that works for one that is asserted.
+3. **A track record.** Ten to twenty retrain cycles where the gate's verdict and
+   the human's decision agreed. If they always agree, the human is ceremony. If
+   they sometimes disagree, that disagreement is exactly the signal that must be
+   encoded before automating.
+4. **Extraction-side evaluation** (see Q3), so "the model got better" covers
+   both models rather than only the classifier.
 
 **What I would keep even then:** the human on *staging → production*. Automating
 dev-to-staging with a proven rollback is a reasonable trade; automating the last hop
@@ -209,33 +214,35 @@ removes the last place anyone looks at what is about to serve customers.
 
 **What survives, and why:**
 
-- **The schemas.** `schemas/*.json` is the source of truth, and `render_all()` is
-  driven by *what is on disk* rather than a hardcoded list. Dropping in
+- **The schemas.** `schemas/*.json` is the source of truth, and `render_all()`
+  is driven by *what is on disk* rather than a hardcoded list. Dropping in
   `purchase_order.json` gives you a rendered prompt, a response schema, and a
   validator with no code change.
-- **The extraction path.** The prompt is fetched from DynamoDB by class name, so a new
-  class needs a `make seed-prompts`, not a deploy.
-- **All the infrastructure.** One KMS key, one bucket set, one endpoint, one state
-  machine, regardless of class count.
-- **The intake state machine.** No per-class branching exists — routing is confidence
-  plus one always-review rule.
+- **The extraction path.** The prompt is fetched from DynamoDB by class name, so
+  a new class needs a `make seed-prompts`, not a deploy.
+- **All the infrastructure.** One KMS key, one bucket set, one endpoint, one
+  state machine, regardless of class count.
+- **The intake state machine.** No per-class branching exists — routing is
+  confidence plus one always-review rule.
 
 **What breaks at 40, honestly:**
 
-1. **`DOCUMENT_CLASSES` is a frozen tuple in `src/config.py`,** and its *order* defines
-   the column order of every confusion matrix and per-class array in stored artifacts.
-   Adding a class is an append; the comment says so. But a customer success team cannot
-   append to a Python constant — that is the crux of this question.
-2. **`FIELD_RULES` requires an explicit entry per class**, deliberately, so "no rules"
-   is a decision rather than an oversight. At 40 classes that becomes 40 entries a
-   non-engineer cannot write.
+1. **`DOCUMENT_CLASSES` is a frozen tuple in `src/config.py`,** and its *order*
+   defines the column order of every confusion matrix and per-class array in
+   stored artifacts. Adding a class is an append; the comment says so. But a
+   customer success team cannot append to a Python constant — that is the crux
+   of this question.
+2. **`FIELD_RULES` requires an explicit entry per class**, deliberately, so "no
+   rules" is a decision rather than an oversight. At 40 classes that becomes 40
+   entries a non-engineer cannot write.
 3. **The always-review rule is a hardcoded class name** in two Choice states.
-4. **The classifier.** TF-IDF over 40 classes with human-authored examples will be far
-   worse than over 4, and the confidence threshold that gives 12% review at 4 classes
-   will give something very different at 40.
+4. **The classifier.** TF-IDF over 40 classes with human-authored examples will
+   be far worse than over 4, and the confidence threshold that gives 12% review
+   at 4 classes will give something very different at 40.
 5. **Per-class dashboard widgets.** Four series is legible; forty is a smear.
-6. **Cost.** Per-class metrics are dimensioned by `DocumentClass`, so custom-metric
-   count scales with class count — 9 metrics × 40 classes is a real bill.
+6. **Cost.** Per-class metrics are dimensioned by `DocumentClass`, so
+   custom-metric count scales with class count — 9 metrics × 40 classes is a
+   real bill.
 
 **What I would change:** make the class list **data**, loaded from `schemas/` at
 startup rather than declared in code, with `FIELD_RULES` and the always-review flag
@@ -306,17 +313,18 @@ possible selector because it correlates directly with the thing being learned.
 
 **Three cycles, concretely:**
 
-- **Cycle 1.** Train on training data plus corrections. The corrections are all hard
-  cases, so the decision boundary shifts toward them. Golden-set macro-F1 may improve —
-  the gate passes.
-- **Cycle 2.** The shifted boundary means more documents now fall below the confidence
-  threshold, so more get reviewed, so cycle 2's correction set is *larger and more
-  biased* than cycle 1's. The model gets better at ambiguity and no better at the
-  confident majority, because that majority never enters the training set.
-- **Cycle 3.** The model is now specialised for the hard slice. Its errors on the easy
-  majority are unchanged and invisible. **And the override rate — the primary quality
-  proxy — can be falling the whole time**, because the documents reaching reviewers are
-  increasingly ones the model now handles well.
+- **Cycle 1.** Train on training data plus corrections. The corrections are all
+  hard cases, so the decision boundary shifts toward them. Golden-set macro-F1
+  may improve — the gate passes.
+- **Cycle 2.** The shifted boundary means more documents now fall below the
+  confidence threshold, so more get reviewed, so cycle 2's correction set is
+  *larger and more biased* than cycle 1's. The model gets better at ambiguity
+  and no better at the confident majority, because that majority never enters
+  the training set.
+- **Cycle 3.** The model is now specialised for the hard slice. Its errors on
+  the easy majority are unchanged and invisible. **And the override rate — the
+  primary quality proxy — can be falling the whole time**, because the documents
+  reaching reviewers are increasingly ones the model now handles well.
 
 **That is the failure mode: the quality metric improves while real accuracy degrades,
 and no metric in this platform would catch it.** Confidently-wrong documents
@@ -326,20 +334,147 @@ reach.
 
 **What I would do, in priority order:**
 
-1. **Audit sampling.** Route ~1–2% of *confidently auto-approved* documents to human
-   review anyway. This is the only mechanism that puts confidently-wrong documents into
-   the training data, and it simultaneously provides an unbiased accuracy estimate.
-   Fixed, predictable cost. **Not implemented — the single highest-value addition to
-   this design**, and the same change that answers Q2.
+1. **Audit sampling.** Route ~1–2% of *confidently auto-approved* documents to
+   human review anyway. This is the only mechanism that puts confidently-wrong
+   documents into the training data, and it simultaneously provides an unbiased
+   accuracy estimate. Fixed, predictable cost. **Not implemented — the single
+   highest-value addition to this design**, and the same change that answers Q2.
 2. **Stratified sampling** when assembling the retrain set, so its confidence
    distribution matches production rather than the review queue's.
-3. **Importance weighting.** The selection probability is *known* — it is a threshold
-   on a recorded confidence — so the correction is computable rather than estimated.
-4. **A separate audited hold-out**, never sourced from review, to evaluate against. The
-   golden set plays this role today but is synthetic and frozen.
+3. **Importance weighting.** The selection probability is *known* — it is a
+   threshold on a recorded confidence — so the correction is computable rather
+   than estimated.
+4. **A separate audited hold-out**, never sourced from review, to evaluate
+   against. The golden set plays this role today but is synthetic and frozen.
 
 **What the platform does do:** the corrections table records `original_predicted_class`,
 `original_confidence` and `was_prediction_correct` on every row, specifically so the
 bias is *measurable* — you can plot the confidence distribution of the labelled set
 against production and see the gap. Measuring it is not fixing it, and I would not
 claim otherwise.
+
+---
+
+# Beyond the seven
+
+Questions the assignment does not list but which follow naturally from the design.
+Each answer is short here and cites where the long form lives, because a second full
+copy of an argument is a second thing that can go stale — the same reason the alarm
+inventory and the wildcard list are generated rather than typed.
+
+## The same document is uploaded twice. What happens?
+
+The idempotency key is `bucket + key + versionId`, claimed with a conditional
+DynamoDB `PutItem` on `attribute_not_exists` — and claimed **before anything
+billable**, ahead of Textract and Bedrock rather than after them. A second delivery
+finds the item and short-circuits to the stored result.
+
+The part people miss is that it has to guard *two* things. One result and one review
+task. Guarding only result creation still lets a redelivery park a second copy of the
+same document in front of a reviewer, who then corrects it twice and writes two
+conflicting labels into the training data.
+
+`evidence/m3/trace-duplicate-delivery.json` shows the short-circuit. Long form:
+"Idempotency is claimed before anything billable" in [decisions.md](./decisions.md).
+
+## Why only two Lambdas in the workflow?
+
+Because a Lambda that computes `confidence >= 0.80` is a cold start, an IAM role and
+a deployment artifact standing in for an `if`. Textract, SageMaker Runtime, Bedrock
+and DynamoDB are all direct SDK integrations; routing is a `Choice` state.
+
+The two that remain do work ASL cannot: OCR normalisation and schema validation. A
+third exists outside the workflow — the review API — because it is an HTTP endpoint
+and Step Functions is not a web server.
+
+Long form: "Two Lambdas in the workflow, and both earn their place".
+
+## How do you know the tests are any good?
+
+A passing test proves nothing about whether it would fail. `make prove-regressions`
+injects each of six regressions and asserts the corresponding test **fails** — 6/6
+caught, and CI runs it.
+
+Writing that harness is what exposed two tests that were catching nothing: one
+skipped whenever a generated artifact was absent, which is always in CI, and one
+checked that a condition expression *contained* `attribute_not_exists`, so it would
+have accepted `attribute_exists(x) or attribute_not_exists(x)`.
+
+Long form: "The regression tests are proved, not asserted".
+
+## v2 is the more accurate model. Why is v1 the one you would deploy?
+
+| | macro-F1 | ECE |
+|---|---|---|
+| v1 (calibrated) | 0.9417 | **0.0140** |
+| v2 (calibration disabled) | **0.9543** | 0.2622 |
+
+v2 is better at the task and wrong for this system. The Route state gates on
+confidence at 0.80, and an uncalibrated 0.80 does not mean 80% — so the
+auto-approve decision it feeds becomes arbitrary. Nineteen times worse calibration
+buys 1.3 points of accuracy that the pipeline cannot safely use.
+
+This is why calibration lives inside the model interface rather than as a post-hoc
+step, and why the two required registry versions differ by calibration rather than by
+a hyperparameter: the pair demonstrates the point better than the README can assert
+it.
+
+Long form: "Calibration is part of the model, not a post-hoc nicety".
+
+## What is actually swappable, and how would I prove it?
+
+Three seams, and the claim is falsifiable:
+
+- **The classifier** sits behind `fit` / `predict` / `predict_proba` / `save` /
+  `load` in `src/training/model.py`.
+- **The extraction prompt** is data, rendered from `schemas/*.json` into
+  DynamoDB by `make seed-prompts`.
+- **The Bedrock model id** is a Terraform variable substituted into the ASL.
+
+The test of the claim is that none of those three changes requires editing Terraform,
+ASL, or a handler. Adding a document class is a JSON file and a seed command.
+
+## Why two state machines for retrain and promote, rather than one with a wait state?
+
+Because the requirement is that retraining never auto-deploys, and the two designs
+make different promises about it.
+
+With one state machine pausing on `.waitForTaskToken`, the path from "training
+finished" to "traffic shifted" is continuous — approval is a pause in a workflow
+already heading for production, and anything holding the token resumes it. With two,
+that path does not exist: the retrain role's IAM policy grants no SageMaker endpoint
+action at all, so a retrain definition edited to call `UpdateEndpoint` fails on
+permissions rather than deploying.
+
+It also survives the boring failure. A week-long approval means a week-long running
+execution and an expiring task token; the registry holds a pending version
+indefinitely, and approving a three-week-old version behaves exactly like approving a
+fresh one.
+
+Long form: "Two state machines for retrain and promote, not one with a wait state".
+
+## Which defects did the audit find?
+
+Eight, of which two meant the system could not have worked at all:
+
+- **No `aws_s3_bucket_notification` on the raw bucket.** No upload would ever
+  have reached EventBridge. Everything downstream was correct and unreachable.
+- **Static resource names plus `create_before_destroy`.** Every endpoint
+  *update* — the only path a canary takes — would have failed with "cannot
+  create already existing". The rollback configuration was correct and could
+  never execute.
+
+The rest: a dimension mismatch between emitted and queried metrics, an execution
+timeout shorter than the review timeout it contained, a CI deploy role that could not
+apply, a backlog alarm whose metric math computed the auto-approved count, a DLQ
+alarm with no `alarm_actions`, and a dead-letter payload that embedded full OCR text
+against a 256KB limit.
+
+Each now has a test, and the dimension mismatch is in the regression-proof harness,
+so it is verified to fail on the real defect rather than merely asserted.
+
+Two more worth naming because they were mine rather than an auditor's: the document
+generator leaked the class name into the header, producing a meaningless macro-F1 of
+1.00; and the drift baseline computed its confidence reference on training data,
+where p10 is 0.865 against 0.731 on held-out — a drift job built on it would have
+reported drift on day one, permanently.

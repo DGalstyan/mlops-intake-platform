@@ -373,9 +373,9 @@ question M5 has to answer:
   features do not capture.
 - **per-feature moments** → lets drift be *attributed* to specific vocabulary
   rather than only reported as "something moved".
-- **vocabulary size + coverage** → a TF-IDF model silently ignores unseen tokens,
-  so falling coverage means the model is going blind to its input while its
-  confidence stays high. Nothing else in the artifact reveals that.
+- **vocabulary size + coverage** → a TF-IDF model silently ignores unseen
+  tokens, so falling coverage means the model is going blind to its input while
+  its confidence stays high. Nothing else in the artifact reveals that.
 
 Keeping accuracy out is the important part. Mixing model-quality metrics into the
 drift reference invites exactly the mistake M5 must avoid — treating "the data
@@ -536,15 +536,15 @@ graded run.
 **Because:** serverless cannot satisfy three separate M2 requirements at once, and
 each loss lands on a different graded milestone:
 
-1. **Data capture is not supported on serverless endpoints.** M5's drift detection
-   reads data-capture files as its only source of production traffic. Choosing
-   serverless deletes the input to a 20%-weighted milestone.
+1. **Data capture is not supported on serverless endpoints.** M5's drift
+   detection reads data-capture files as its only source of production traffic.
+   Choosing serverless deletes the input to a 20%-weighted milestone.
 2. **Application Auto Scaling does not apply.** Serverless scales on its own
    concurrency model, so "autoscaling on a justified metric, with a documented
    reason for the target value" has nothing to configure and nothing to justify.
-3. **Blue/green deployment guardrails are real-time only.** Canary traffic shifting
-   with alarm-driven automatic rollback is M2's headline deliverable and simply
-   does not exist for serverless endpoints.
+3. **Blue/green deployment guardrails are real-time only.** Canary traffic
+   shifting with alarm-driven automatic rollback is M2's headline deliverable
+   and simply does not exist for serverless endpoints.
 
 Cold starts, the usual argument against serverless, are not the reason. They would
 be manageable — the model loads in well under a second. The disqualifier is that
@@ -698,14 +698,15 @@ retried indefinitely. See the README's known gaps.
 **Chose:** direct SDK integrations for Textract, SageMaker Runtime, Bedrock, DynamoDB
 and SQS. Exactly two Lambdas inside the state machine, plus one outside it:
 
-1. `NormalizeOcr` — Textract returns a block *graph*. Assembling reading-order text
-   requires sorting blocks by geometry with row banding and joining them; ASL cannot
-   sort an array of objects by a nested numeric field. It also computes the content
-   hash and the char/line counts M4 turns into metrics.
+1. `NormalizeOcr` — Textract returns a block *graph*. Assembling reading-order
+   text requires sorting blocks by geometry with row banding and joining them;
+   ASL cannot sort an array of objects by a nested numeric field. It also
+   computes the content hash and the char/line counts M4 turns into metrics.
 2. `ValidateExtraction` — JSON Schema validation and cross-field rules. A Choice
    state can compare two values; it cannot evaluate a regex, an enum, or
    "expiry_date must be after date_of_birth".
-3. The review API, which is outside the state machine because it is an HTTP endpoint.
+3. The review API, which is outside the state machine because it is an HTTP
+   endpoint.
 
 **Over:** the conventional shape, where a Lambda sits in front of each service call
 to marshal its request and response.
@@ -719,10 +720,11 @@ not expect:
   two Choice states. The endpoint returns its own `auto_approve_eligible`
   boolean, computed against the config threshold, so the ASL compares a boolean
   rather than duplicating the number, and there is a test asserting the ASL
-  contains no hardcoded threshold. - **The extraction prompt needed no Lambda
-  either.** Prompts are rendered from `schemas/*.json` at deploy time into
-  DynamoDB and read with a direct GetItem. So adding a field, or a whole
-  document class, touches one JSON file and nothing else.
+  contains no hardcoded threshold.
+- **The extraction prompt needed no Lambda either.** Prompts are rendered from
+  `schemas/*.json` at deploy time into DynamoDB and read with a direct GetItem.
+  So adding a field, or a whole document class, touches one JSON file and
+  nothing else.
 
 **I'd flip this if:** a step needed genuine branching logic over a payload, at
 which point a Lambda is honest and a 12-state ASL detour is not.
@@ -886,11 +888,12 @@ publishing them as values.
 1. A rate is frozen at the aggregation period it was computed for. With
    counters, the dashboard shows a 15-minute rate and an alarm evaluates an
    hourly one over the same datapoints. With a pre-averaged rate, one of those
-   is wrong. 2. The assignment requires `EstimatedCostPerDocument` to be
-   computed from *real token counts × documented prices*. Emitting a computed
-   cost bakes today's price list into stored datapoints, so when prices change,
-   last week's cost becomes unrecomputable, and worse, the historical series
-   silently mixes two price regimes.
+   is wrong.
+2. The assignment requires `EstimatedCostPerDocument` to be computed from *real
+   token counts × documented prices*. Emitting a computed cost bakes today's
+   price list into stored datapoints, so when prices change, last week's cost
+   becomes unrecomputable, and worse, the historical series silently mixes two
+   price regimes.
 
 It also happened to solve an ASL limitation: ASL cannot convert a boolean to a number,
 so `AutoApproved = 1 or 0` was not expressible. Emitting a constant `1` from the
